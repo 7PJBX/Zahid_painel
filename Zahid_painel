@@ -1,0 +1,336 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+local player = Players.LocalPlayer
+
+local conns = {}
+local flyState = {}
+
+-- ===== ANTIFLING =====
+local function antiFling(on)
+	if conns.antifling then conns.antifling:Disconnect() conns.antifling = nil end
+	if not on then return end
+	conns.antifling = RunService.Stepped:Connect(function()
+		for _, p in ipairs(Players:GetPlayers()) do
+			if p ~= player and p.Character then
+				for _, part in ipairs(p.Character:GetDescendants()) do
+					if part:IsA("BasePart") then part.CanCollide = false end
+				end
+			end
+		end
+		local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+		if hrp and (hrp.AssemblyLinearVelocity.Magnitude > 150
+			or hrp.AssemblyAngularVelocity.Magnitude > 50) then
+			hrp.AssemblyLinearVelocity = Vector3.zero
+			hrp.AssemblyAngularVelocity = Vector3.zero
+		end
+	end)
+end
+
+-- ===== TPTOOL (clica no chão e teleporta) =====
+local tpEnabled = false
+local function giveTpTool()
+	local backpack = player:FindFirstChildOfClass("Backpack")
+	if not backpack or backpack:FindFirstChild("TPTool") then return end
+	local tool = Instance.new("Tool")
+	tool.Name = "TPTool"
+	tool.RequiresHandle = false
+	tool.CanBeDropped = false
+	tool.Activated:Connect(function()
+		local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+		local mouse = player:GetMouse()
+		if hrp and mouse.Hit then
+			hrp.CFrame = CFrame.new(mouse.Hit.Position + Vector3.new(0, 3, 0))
+		end
+	end)
+	tool.Parent = backpack
+end
+
+local function removeTpTool()
+	local bp = player:FindFirstChildOfClass("Backpack")
+	if bp and bp:FindFirstChild("TPTool") then bp.TPTool:Destroy() end
+	if player.Character and player.Character:FindFirstChild("TPTool") then
+		player.Character.TPTool:Destroy()
+	end
+end
+
+local function tpTool(on)
+	tpEnabled = on
+	if on then giveTpTool() else removeTpTool() end
+end
+
+player.CharacterAdded:Connect(function()
+	if tpEnabled then
+		task.wait(0.5)
+		giveTpTool()
+	end
+end)
+
+-- ===== FLY / VFLY =====
+local FLY_SPEED = 60
+
+local function stopFlight(key)
+	if conns[key] then conns[key]:Disconnect() conns[key] = nil end
+	local s = flyState[key]
+	if s then
+		if s.bv then s.bv:Destroy() end
+		if s.bg then s.bg:Destroy() end
+		if s.hum and not s.needSeat then s.hum.PlatformStand = false end
+		flyState[key] = nil
+	end
+end
+
+local function startFlight(key, needSeat)
+	stopFlight(key)
+	flyState[key] = { needSeat = needSeat }
+	conns[key] = RunService.Heartbeat:Connect(function()
+		local s = flyState[key]
+		local char = player.Character
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		if not s or not hum then return end
+
+		local part
+		if needSeat then
+			part = hum.SeatPart
+		else
+			part = char:FindFirstChild("HumanoidRootPart")
+		end
+
+		-- sem alvo (ex.: VFly fora do veículo): limpa e espera
+		if not part then
+			if s.bv then s.bv:Destroy() s.bv = nil end
+			if s.bg then s.bg:Destroy() s.bg = nil end
+			s.target = nil
+			return
+		end
+
+		-- alvo novo: cria os controladores de voo
+		if part ~= s.target then
+			if s.bv then s.bv:Destroy() end
+			if s.bg then s.bg:Destroy() end
+			s.target, s.hum = part, hum
+			s.bv = Instance.new("BodyVelocity")
+			s.bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+			s.bv.Velocity = Vector3.zero
+			s.bv.Parent = part
+			s.bg = Instance.new("BodyGyro")
+			s.bg.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
+			s.bg.P = 9e4
+			s.bg.Parent = part
+			if not needSeat then hum.PlatformStand = true end
+		end
+
+		local cam = workspace.CurrentCamera
+		local rel = cam.CFrame:VectorToObjectSpace(hum.MoveDirection)
+		local dir = cam.CFrame.LookVector * (-rel.Z) + cam.CFrame.RightVector * rel.X
+		if UIS:IsKeyDown(Enum.KeyCode.Space) or UIS:IsKeyDown(Enum.KeyCode.E) then
+			dir += Vector3.new(0, 1, 0)
+		end
+		if UIS:IsKeyDown(Enum.KeyCode.Q) then
+			dir -= Vector3.new(0, 1, 0)
+		end
+
+		s.bv.Velocity = dir * FLY_SPEED
+		s.bg.CFrame = cam.CFrame
+	end)
+end
+
+local function fly(on)
+	if on then startFlight("fly", false) else stopFlight("fly") end
+end
+
+local function vfly(on)
+	if on then startFlight("vfly", true) else stopFlight("vfly") end
+end
+
+-- ===== LISTA DE BOTÕES =====
+local options = {
+	{ name = "AntiFling", fn = antiFling },
+	{ name = "TPTool",    fn = tpTool },
+	{ name = "VFly",      fn = vfly },
+	{ name = "Fly",       fn = fly },
+}
+
+-- ===== INTERFACE =====
+local gui = Instance.new("ScreenGui")
+gui.Name = "MiniMenu"
+gui.ResetOnSpawn = false
+gui.Parent = player:WaitForChild("PlayerGui")
+
+local bubble = Instance.new("TextButton")
+bubble.Size = UDim2.fromOffset(48, 48)
+bubble.Position = UDim2.fromOffset(20, 200)
+bubble.Text = "+"
+bubble.TextScaled = true
+bubble.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+bubble.TextColor3 = Color3.new(1, 1, 1)
+bubble.Parent = gui
+Instance.new("UICorner", bubble).CornerRadius = UDim.new(1, 0)
+
+local PANEL_W = 220
+local LIST_W = 170
+local panelH = 8 + #options * 40 + 40 + 40 + 8
+local panel = Instance.new("Frame")
+panel.Size = UDim2.fromOffset(PANEL_W, panelH)
+panel.Position = UDim2.fromOffset(0, 56)
+panel.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+panel.Active = true
+panel.Visible = false
+panel.Parent = bubble
+Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 10)
+
+-- botões liga/desliga
+for i, opt in ipairs(options) do
+	local state = false
+	local row = Instance.new("TextButton")
+	row.Size = UDim2.new(1, -16, 0, 32)
+	row.Position = UDim2.fromOffset(8, 8 + (i - 1) * 40)
+	row.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+	row.TextColor3 = Color3.new(1, 1, 1)
+	row.Text = opt.name .. ": OFF"
+	row.Parent = panel
+	Instance.new("UICorner", row).CornerRadius = UDim.new(0, 8)
+
+	row.Activated:Connect(function()
+		state = not state
+		opt.fn(state)
+		row.Text = opt.name .. (state and ": ON" or ": OFF")
+		row.BackgroundColor3 = state and Color3.fromRGB(40, 160, 70) or Color3.fromRGB(60, 60, 60)
+	end)
+end
+
+-- seletor de jogador
+local selectedPlayer = nil
+local selY = 8 + #options * 40
+
+local selectBtn = Instance.new("TextButton")
+selectBtn.Size = UDim2.fromOffset(PANEL_W - 16 - 40, 32)
+selectBtn.Position = UDim2.fromOffset(8, selY)
+selectBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+selectBtn.TextColor3 = Color3.new(1, 1, 1)
+selectBtn.TextTruncate = Enum.TextTruncate.AtEnd
+selectBtn.Text = "Selecionar jogador"
+selectBtn.Parent = panel
+Instance.new("UICorner", selectBtn).CornerRadius = UDim.new(0, 8)
+
+local refreshBtn = Instance.new("TextButton")
+refreshBtn.Size = UDim2.fromOffset(32, 32)
+refreshBtn.Position = UDim2.fromOffset(PANEL_W - 8 - 32, selY)
+refreshBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+refreshBtn.TextColor3 = Color3.new(1, 1, 1)
+refreshBtn.Text = "Ref"
+refreshBtn.TextScaled = true
+refreshBtn.Parent = panel
+Instance.new("UICorner", refreshBtn).CornerRadius = UDim.new(0, 8)
+
+local tpBtn = Instance.new("TextButton")
+tpBtn.Size = UDim2.new(1, -16, 0, 32)
+tpBtn.Position = UDim2.fromOffset(8, selY + 40)
+tpBtn.BackgroundColor3 = Color3.fromRGB(50, 90, 180)
+tpBtn.TextColor3 = Color3.new(1, 1, 1)
+tpBtn.Text = "TP até o jogador"
+tpBtn.Parent = panel
+Instance.new("UICorner", tpBtn).CornerRadius = UDim.new(0, 8)
+
+-- lista (abre ao lado do painel)
+local list = Instance.new("ScrollingFrame")
+list.Size = UDim2.fromOffset(LIST_W, 150)
+list.Position = UDim2.fromOffset(PANEL_W + 6, selY)
+list.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+list.BorderSizePixel = 0
+list.ScrollBarThickness = 4
+list.AutomaticCanvasSize = Enum.AutomaticSize.Y
+list.CanvasSize = UDim2.new()
+list.Active = true
+list.Visible = false
+list.Parent = panel
+Instance.new("UICorner", list).CornerRadius = UDim.new(0, 10)
+local layout = Instance.new("UIListLayout", list)
+layout.Padding = UDim.new(0, 4)
+local pad = Instance.new("UIPadding", list)
+pad.PaddingTop, pad.PaddingBottom = UDim.new(0, 6), UDim.new(0, 6)
+pad.PaddingLeft, pad.PaddingRight = UDim.new(0, 6), UDim.new(0, 6)
+
+local function refreshList()
+	for _, c in ipairs(list:GetChildren()) do
+		if c:IsA("TextButton") then c:Destroy() end
+	end
+	local found = false
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= player then
+			if p == selectedPlayer then found = true end
+			local b = Instance.new("TextButton")
+			b.Size = UDim2.new(1, 0, 0, 28)
+			b.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+			b.TextColor3 = Color3.new(1, 1, 1)
+			b.TextTruncate = Enum.TextTruncate.AtEnd
+			b.Text = p.DisplayName .. " (@" .. p.Name .. ")"
+			b.Parent = list
+			Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+			b.Activated:Connect(function()
+				selectedPlayer = p
+				selectBtn.Text = p.DisplayName
+				list.Visible = false
+			end)
+		end
+	end
+	if selectedPlayer and not found then
+		selectedPlayer = nil
+		selectBtn.Text = "Selecionar jogador"
+	end
+end
+
+selectBtn.Activated:Connect(function()
+	refreshList()
+	-- abre à direita; se não couber na tela, abre à esquerda
+	local screenW = gui.AbsoluteSize.X
+	if bubble.AbsolutePosition.X + PANEL_W + 6 + LIST_W > screenW then
+		list.Position = UDim2.fromOffset(-LIST_W - 6, selY)
+	else
+		list.Position = UDim2.fromOffset(PANEL_W + 6, selY)
+	end
+	list.Visible = not list.Visible
+end)
+refreshBtn.Activated:Connect(refreshList)
+Players.PlayerAdded:Connect(refreshList)
+Players.PlayerRemoving:Connect(function() task.defer(refreshList) end)
+
+tpBtn.Activated:Connect(function()
+	local myHrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+	local targetChar = selectedPlayer and selectedPlayer.Character
+	local targetHrp = targetChar and targetChar:FindFirstChild("HumanoidRootPart")
+	if myHrp and targetHrp then
+		myHrp.CFrame = targetHrp.CFrame * CFrame.new(0, 0, 3)
+	end
+end)
+
+refreshList()
+
+-- ===== ARRASTAR A BOLINHA / CLICAR ABRE O MENU =====
+local dragging, startPos, startInput, moved
+bubble.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch then
+		dragging, moved = true, false
+		startPos, startInput = bubble.Position, input.Position
+	end
+end)
+UIS.InputChanged:Connect(function(input)
+	if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+		or input.UserInputType == Enum.UserInputType.Touch) then
+		local d = input.Position - startInput
+		if d.Magnitude > 6 then moved = true end
+		bubble.Position = UDim2.fromOffset(startPos.X.Offset + d.X, startPos.Y.Offset + d.Y)
+	end
+end)
+UIS.InputEnded:Connect(function(input)
+	if dragging and (input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch) then
+		dragging = false
+		if not moved then
+			panel.Visible = not panel.Visible
+			if not panel.Visible then list.Visible = false end
+			bubble.Text = panel.Visible and "–" or "+"
+		end
+	end
+end)
