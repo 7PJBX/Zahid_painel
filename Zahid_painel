@@ -399,11 +399,14 @@ bubbleScale.Parent = bubble
 local PANEL_W = 220
 local LIST_W = 170
 local LIST_Y = 0 -- altura da lista em relação ao painel (0 = alinhada ao topo)
-local panelH = 8 + #options * 40 + 40 + 40 + 40 + 8
-local LIST_H = panelH
+local panelH = 8 + #options * 40 + 40 + 40 + 40 + 
+local TITLE_H = 30
+local VIEW_H = 220 -- altura visível dos botões (o resto rola)
+local PANEL_H = TITLE_H + VIEW_H
+local LIST_H = PANEL_H
 
 local panel = Instance.new("Frame")
-panel.Size = UDim2.fromOffset(PANEL_W, panelH)
+panel.Size = UDim2.fromOffset(PANEL_W, PANEL_H)
 panel.Position = UDim2.fromOffset(0, 56)
 panel.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
 panel.Active = true
@@ -413,6 +416,23 @@ Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 10)
 
 local panelScale = Instance.new("UIScale")
 panelScale.Parent = panel
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, 0, 0, TITLE_H)
+title.BackgroundTransparency = 1
+title.Text = "te amo mi amore"
+title.TextColor3 = Color3.fromRGB(255, 130, 180)
+title.Font = Enum.Font.GothamBold
+title.TextSize = 16
+title.Parent = panel
+
+local content = Instance.new("ScrollingFrame")
+content.Size = UDim2.new(1, 0, 0, VIEW_H)
+content.Position = UDim2.fromOffset(0, TITLE_H)
+content.BackgroundTransparency = 1
+content.BorderSizePixel = 0
+content.ScrollBarThickness = 4
+content.CanvasSize = UDim2.fromOffset(0, panelH)
+content.Parent = panel
 
 -- botões liga/desliga
 for i, opt in ipairs(options) do
@@ -423,7 +443,7 @@ for i, opt in ipairs(options) do
 	row.BackgroundColor3 = COLOR_OFF
 	row.TextColor3 = Color3.new(1, 1, 1)
 	row.Text = opt.name .. ": OFF"
-	row.Parent = panel
+	row.Parent = content
 	Instance.new("UICorner", row).CornerRadius = UDim.new(0, 8)
 	addPress(row)
 
@@ -446,7 +466,7 @@ local function makeHoldButton(text, x, setter)
 	b.BackgroundColor3 = COLOR_OFF
 	b.TextColor3 = Color3.new(1, 1, 1)
 	b.Text = text
-	b.Parent = panel
+	b.Parent = content
 	Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
 	addPress(b)
 
@@ -478,7 +498,7 @@ selectBtn.BackgroundColor3 = COLOR_OFF
 selectBtn.TextColor3 = Color3.new(1, 1, 1)
 selectBtn.TextTruncate = Enum.TextTruncate.AtEnd
 selectBtn.Text = "Selecionar jogador"
-selectBtn.Parent = panel
+selectBtn.Parent = content
 Instance.new("UICorner", selectBtn).CornerRadius = UDim.new(0, 8)
 addPress(selectBtn)
 
@@ -489,7 +509,7 @@ refreshBtn.BackgroundColor3 = COLOR_OFF
 refreshBtn.TextColor3 = Color3.new(1, 1, 1)
 refreshBtn.Text = "Ref"
 refreshBtn.TextScaled = true
-refreshBtn.Parent = panel
+refreshBtn.Parent = content
 Instance.new("UICorner", refreshBtn).CornerRadius = UDim.new(0, 8)
 addPress(refreshBtn)
 
@@ -499,7 +519,7 @@ tpBtn.Position = UDim2.fromOffset(8, selY + 40)
 tpBtn.BackgroundColor3 = Color3.fromRGB(50, 90, 180)
 tpBtn.TextColor3 = Color3.new(1, 1, 1)
 tpBtn.Text = "TP até o jogador"
-tpBtn.Parent = panel
+tpBtn.Parent = content
 Instance.new("UICorner", tpBtn).CornerRadius = UDim.new(0, 8)
 addPress(tpBtn)
 
