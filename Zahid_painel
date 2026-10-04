@@ -143,12 +143,52 @@ local function vfly(on)
 	if on then startFlight("vfly", true) else stopFlight("vfly") end
 end
 
+-- ===== FLOAT (plataforma invisível sob os pés; Q desce / E sobe) =====
+local FLOAT_SPEED = 20
+local floatPart, floatY
+local floatUp, floatDown = false, false
+
+local function floatToggle(on)
+	if conns.float then conns.float:Disconnect() conns.float = nil end
+	if floatPart then floatPart:Destroy() floatPart = nil end
+	floatUp, floatDown = false, false
+	if not on then return end
+
+	local char = player.Character
+	local hrp = char and char:FindFirstChild("HumanoidRootPart")
+	if not hrp then return end
+
+	floatPart = Instance.new("Part")
+	floatPart.Name = "FloatPlatform"
+	floatPart.Size = Vector3.new(6, 1, 6)
+	floatPart.Anchored = true
+	floatPart.CanCollide = true
+	floatPart.CanQuery = false
+	floatPart.Transparency = 1
+	floatPart.Parent = workspace
+
+	floatY = hrp.Position.Y - 3.5 -- topo da plataforma na altura dos pés
+
+	conns.float = RunService.Heartbeat:Connect(function(dt)
+		local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+		if not root or not floatPart then return end
+
+		local dy = 0
+		if floatUp or UIS:IsKeyDown(Enum.KeyCode.E) then dy += 1 end
+		if floatDown or UIS:IsKeyDown(Enum.KeyCode.Q) then dy -= 1 end
+		floatY += dy * FLOAT_SPEED * dt
+
+		floatPart.CFrame = CFrame.new(root.Position.X, floatY, root.Position.Z)
+	end)
+end
+
 -- ===== LISTA DE BOTÕES =====
 local options = {
 	{ name = "AntiFling", fn = antiFling },
 	{ name = "TPTool",    fn = tpTool },
 	{ name = "VFly",      fn = vfly },
 	{ name = "Fly",       fn = fly },
+	{ name = "Float",     fn = floatToggle },
 }
 
 -- ===== INTERFACE =====
@@ -169,7 +209,7 @@ Instance.new("UICorner", bubble).CornerRadius = UDim.new(1, 0)
 
 local PANEL_W = 220
 local LIST_W = 170
-local panelH = 8 + #options * 40 + 40 + 40 + 8
+local panelH = 8 + #options * 40 + 40 + 40 + 40 + 8
 local panel = Instance.new("Frame")
 panel.Size = UDim2.fromOffset(PANEL_W, panelH)
 panel.Position = UDim2.fromOffset(0, 56)
@@ -199,9 +239,42 @@ for i, opt in ipairs(options) do
 	end)
 end
 
+-- botões Q / E do Float (segure para descer / subir)
+local qeY = 8 + #options * 40
+local halfW = (PANEL_W - 16 - 8) / 2
+
+local function makeHoldButton(text, x, setter)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.fromOffset(halfW, 32)
+	b.Position = UDim2.fromOffset(x, qeY)
+	b.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+	b.TextColor3 = Color3.new(1, 1, 1)
+	b.Text = text
+	b.Parent = panel
+	Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
+
+	b.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+			setter(true)
+			b.BackgroundColor3 = Color3.fromRGB(40, 160, 70)
+		end
+	end)
+	b.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+			setter(false)
+			b.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+		end
+	end)
+end
+
+makeHoldButton("Q (descer)", 8, function(v) floatDown = v end)
+makeHoldButton("E (subir)", 8 + halfW + 8, function(v) floatUp = v end)
+
 -- seletor de jogador
 local selectedPlayer = nil
-local selY = 8 + #options * 40
+local selY = qeY + 40
 
 local selectBtn = Instance.new("TextButton")
 selectBtn.Size = UDim2.fromOffset(PANEL_W - 16 - 40, 32)
