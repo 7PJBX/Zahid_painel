@@ -1,6 +1,7 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
 local player = Players.LocalPlayer
 
 local conns = {}
@@ -191,6 +192,189 @@ local options = {
 	{ name = "Float",     fn = floatToggle },
 }
 
+-- ===== ANIMAÇÃO: FUNÇÕES AUXILIARES =====
+local COLOR_OFF = Color3.fromRGB(60, 60, 60)
+local COLOR_ON = Color3.fromRGB(40, 160, 70)
+
+local function tween(obj, time, props, style, dir)
+	local t = TweenService:Create(
+		obj,
+		TweenInfo.new(time, style or Enum.EasingStyle.Quad, dir or Enum.EasingDirection.Out),
+		props
+	)
+	t:Play()
+	return t
+end
+
+local function isPress(input)
+	return input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch
+end
+
+-- efeito de "apertar" o botão
+local function addPress(btn)
+	local sc = Instance.new("UIScale")
+	sc.Parent = btn
+	btn.InputBegan:Connect(function(input)
+		if isPress(input) then tween(sc, 0.08, { Scale = 0.92 }) end
+	end)
+	btn.InputEnded:Connect(function(input)
+		if isPress(input) then tween(sc, 0.2, { Scale = 1 }, Enum.EasingStyle.Back) end
+	end)
+end
+
+-- ===== INTRO: BEIJO 💋 =====
+local function playIntro(onDone)
+	local introGui = Instance.new("ScreenGui")
+	introGui.Name = "KissIntro"
+	introGui.IgnoreGuiInset = true
+	introGui.ResetOnSpawn = false
+	introGui.DisplayOrder = 100
+	introGui.Parent = player:WaitForChild("PlayerGui")
+
+	local CENTER = UDim2.fromScale(0.5, 0.5)
+	local BIG = 3 -- tamanho final do beijo (multiplicador)
+
+	local function newEmoji(emoji, size)
+		local l = Instance.new("TextLabel")
+		l.BackgroundTransparency = 1
+		l.Text = emoji
+		l.TextSize = size
+		l.Size = UDim2.fromOffset(size + 20, size + 20)
+		l.AnchorPoint = Vector2.new(0.5, 0.5)
+		l.Position = CENTER
+		l.Parent = introGui
+		return l
+	end
+
+	local kiss = newEmoji("💋", 90)
+	kiss.ZIndex = 2
+	local kissScale = Instance.new("UIScale")
+	kissScale.Scale = 0.02
+	kissScale.Parent = kiss
+
+	-- 1) cresce do minúsculo até ficar grande
+	tween(kissScale, 1.2, { Scale = BIG }, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut).Completed:Wait()
+
+	-- 2) treme, instável, como se fosse explodir
+	local t0 = os.clock()
+	local SHAKE_TIME = 0.9
+	while os.clock() - t0 < SHAKE_TIME do
+		local k = (os.clock() - t0) / SHAKE_TIME
+		local amp = 3 + k * 14
+		local function r() return (math.random() * 2 - 1) * amp end
+		kiss.Position = UDim2.new(0.5, r(), 0.5, r())
+		kiss.Rotation = r() * 0.8
+		kissScale.Scale = BIG + (math.random() * 2 - 1) * 0.12 * (k + 0.3)
+		RunService.RenderStepped:Wait()
+	end
+	kiss.Position = CENTER
+	kiss.Rotation = 0
+	kissScale.Scale = BIG
+
+	-- 3) deixa a marca de beijo (mesmo emoji, transparente)
+	local mark = kiss:Clone()
+	mark.ZIndex = 1
+	mark.Rotation = -10
+	mark.TextTransparency = 0.6
+	mark.Position = CENTER
+	mark:FindFirstChildOfClass("UIScale").Scale = BIG
+	mark.Parent = introGui
+
+	-- 4) explosão de corações COM FÍSICA (gravidade + quicam nas bordas da tela)
+	local EMOJIS = { "❤️", "💖", "💞", "💕", "💝", "❤️", "🔥", "💛" }
+	local HEART_COUNT = 60
+	local GRAVITY = 1500      -- px/s² (maior = cai mais rápido)
+	local BOUNCE_WALL = 0.7   -- 1 = quica sem perder força
+	local BOUNCE_FLOOR = 0.55
+	local TOTAL_TIME = 5      -- segundos até sumir tudo
+	local FADE_TIME = 0.6
+
+	local screen = introGui.AbsoluteSize
+	local hearts = {}
+	for _ = 1, HEART_COUNT do
+		local size = math.random(24, 46)
+		local label = newEmoji(EMOJIS[math.random(#EMOJIS)], size)
+		label.ZIndex = 3
+		local angle = math.random() * math.pi * 2
+		local speed = math.random(500, 1500)
+		table.insert(hearts, {
+			label = label,
+			r = size / 2,
+			x = screen.X / 2,
+			y = screen.Y / 2,
+			vx = math.cos(angle) * speed,
+			vy = math.sin(angle) * speed - 400, -- leve impulso para cima
+			rot = math.random(-30, 30),
+			vrot = math.random(-500, 500),
+		})
+	end
+
+	local function stepHearts(dt)
+		local W, H = introGui.AbsoluteSize.X, introGui.AbsoluteSize.Y
+		for _, p in ipairs(hearts) do
+			p.vy += GRAVITY * dt
+			p.x += p.vx * dt
+			p.y += p.vy * dt
+			p.rot += p.vrot * dt
+
+			-- paredes (esquerda / direita)
+			if p.x < p.r then
+				p.x = p.r
+				p.vx = -p.vx * BOUNCE_WALL
+				p.vrot = -p.vrot * 0.8
+			elseif p.x > W - p.r then
+				p.x = W - p.r
+				p.vx = -p.vx * BOUNCE_WALL
+				p.vrot = -p.vrot * 0.8
+			end
+
+			-- teto
+			if p.y < p.r then
+				p.y = p.r
+				p.vy = -p.vy * BOUNCE_WALL
+			end
+
+			-- chão (quica, com atrito até parar)
+			if p.y > H - p.r then
+				p.y = H - p.r
+				p.vy = -p.vy * BOUNCE_FLOOR
+				if math.abs(p.vy) < 60 then p.vy = 0 end
+				local friction = 1 - math.min(1, 6 * dt)
+				p.vx *= friction
+				p.vrot *= friction
+			end
+
+			p.label.Position = UDim2.fromOffset(p.x, p.y)
+			p.label.Rotation = p.rot
+		end
+	end
+
+	-- 5) o beijo original volta a ficar minúsculo, "de onde veio"
+	tween(kissScale, 0.6, { Scale = 0.02 }, Enum.EasingStyle.Back, Enum.EasingDirection.In)
+		.Completed:Connect(function() kiss:Destroy() end)
+
+	-- 6) simula a física e, ao fim dos 5s, some tudo
+	local startTime = os.clock()
+	local fading = false
+	while true do
+		local dt = math.min(RunService.Heartbeat:Wait(), 1 / 30)
+		local elapsed = os.clock() - startTime
+		stepHearts(dt)
+
+		if not fading and elapsed >= TOTAL_TIME - FADE_TIME then
+			fading = true
+			tween(mark, FADE_TIME, { TextTransparency = 1 })
+			for _, p in ipairs(hearts) do
+				tween(p.label, FADE_TIME, { TextTransparency = 1 })
+			end
+		end
+		if elapsed >= TOTAL_TIME then break end
+	end
+
+	introGui:Destroy()
+	onDone()
+end
 -- ===== INTERFACE =====
 local gui = Instance.new("ScreenGui")
 gui.Name = "MiniMenu"
@@ -204,12 +388,20 @@ bubble.Text = "+"
 bubble.TextScaled = true
 bubble.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
 bubble.TextColor3 = Color3.new(1, 1, 1)
+bubble.Visible = false -- só aparece depois da intro
 bubble.Parent = gui
 Instance.new("UICorner", bubble).CornerRadius = UDim.new(1, 0)
 
+local bubbleScale = Instance.new("UIScale")
+bubbleScale.Scale = 0.01
+bubbleScale.Parent = bubble
+
 local PANEL_W = 220
 local LIST_W = 170
+local LIST_Y = 0 -- altura da lista em relação ao painel (0 = alinhada ao topo)
 local panelH = 8 + #options * 40 + 40 + 40 + 40 + 8
+local LIST_H = panelH
+
 local panel = Instance.new("Frame")
 panel.Size = UDim2.fromOffset(PANEL_W, panelH)
 panel.Position = UDim2.fromOffset(0, 56)
@@ -219,23 +411,27 @@ panel.Visible = false
 panel.Parent = bubble
 Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 10)
 
+local panelScale = Instance.new("UIScale")
+panelScale.Parent = panel
+
 -- botões liga/desliga
 for i, opt in ipairs(options) do
 	local state = false
 	local row = Instance.new("TextButton")
 	row.Size = UDim2.new(1, -16, 0, 32)
 	row.Position = UDim2.fromOffset(8, 8 + (i - 1) * 40)
-	row.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+	row.BackgroundColor3 = COLOR_OFF
 	row.TextColor3 = Color3.new(1, 1, 1)
 	row.Text = opt.name .. ": OFF"
 	row.Parent = panel
 	Instance.new("UICorner", row).CornerRadius = UDim.new(0, 8)
+	addPress(row)
 
 	row.Activated:Connect(function()
 		state = not state
 		opt.fn(state)
 		row.Text = opt.name .. (state and ": ON" or ": OFF")
-		row.BackgroundColor3 = state and Color3.fromRGB(40, 160, 70) or Color3.fromRGB(60, 60, 60)
+		tween(row, 0.2, { BackgroundColor3 = state and COLOR_ON or COLOR_OFF })
 	end)
 end
 
@@ -247,24 +443,23 @@ local function makeHoldButton(text, x, setter)
 	local b = Instance.new("TextButton")
 	b.Size = UDim2.fromOffset(halfW, 32)
 	b.Position = UDim2.fromOffset(x, qeY)
-	b.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+	b.BackgroundColor3 = COLOR_OFF
 	b.TextColor3 = Color3.new(1, 1, 1)
 	b.Text = text
 	b.Parent = panel
 	Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
+	addPress(b)
 
 	b.InputBegan:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1
-			or input.UserInputType == Enum.UserInputType.Touch then
+		if isPress(input) then
 			setter(true)
-			b.BackgroundColor3 = Color3.fromRGB(40, 160, 70)
+			tween(b, 0.1, { BackgroundColor3 = COLOR_ON })
 		end
 	end)
 	b.InputEnded:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1
-			or input.UserInputType == Enum.UserInputType.Touch then
+		if isPress(input) then
 			setter(false)
-			b.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+			tween(b, 0.2, { BackgroundColor3 = COLOR_OFF })
 		end
 	end)
 end
@@ -279,22 +474,24 @@ local selY = qeY + 40
 local selectBtn = Instance.new("TextButton")
 selectBtn.Size = UDim2.fromOffset(PANEL_W - 16 - 40, 32)
 selectBtn.Position = UDim2.fromOffset(8, selY)
-selectBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+selectBtn.BackgroundColor3 = COLOR_OFF
 selectBtn.TextColor3 = Color3.new(1, 1, 1)
 selectBtn.TextTruncate = Enum.TextTruncate.AtEnd
 selectBtn.Text = "Selecionar jogador"
 selectBtn.Parent = panel
 Instance.new("UICorner", selectBtn).CornerRadius = UDim.new(0, 8)
+addPress(selectBtn)
 
 local refreshBtn = Instance.new("TextButton")
 refreshBtn.Size = UDim2.fromOffset(32, 32)
 refreshBtn.Position = UDim2.fromOffset(PANEL_W - 8 - 32, selY)
-refreshBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+refreshBtn.BackgroundColor3 = COLOR_OFF
 refreshBtn.TextColor3 = Color3.new(1, 1, 1)
 refreshBtn.Text = "Ref"
 refreshBtn.TextScaled = true
 refreshBtn.Parent = panel
 Instance.new("UICorner", refreshBtn).CornerRadius = UDim.new(0, 8)
+addPress(refreshBtn)
 
 local tpBtn = Instance.new("TextButton")
 tpBtn.Size = UDim2.new(1, -16, 0, 32)
@@ -304,11 +501,12 @@ tpBtn.TextColor3 = Color3.new(1, 1, 1)
 tpBtn.Text = "TP até o jogador"
 tpBtn.Parent = panel
 Instance.new("UICorner", tpBtn).CornerRadius = UDim.new(0, 8)
+addPress(tpBtn)
 
 -- lista (abre ao lado do painel)
 local list = Instance.new("ScrollingFrame")
-list.Size = UDim2.fromOffset(LIST_W, 150)
-list.Position = UDim2.fromOffset(PANEL_W + 6, selY)
+list.Size = UDim2.fromOffset(LIST_W, LIST_H)
+list.Position = UDim2.fromOffset(PANEL_W + 6, LIST_Y)
 list.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
 list.BorderSizePixel = 0
 list.ScrollBarThickness = 4
@@ -324,26 +522,44 @@ local pad = Instance.new("UIPadding", list)
 pad.PaddingTop, pad.PaddingBottom = UDim.new(0, 6), UDim.new(0, 6)
 pad.PaddingLeft, pad.PaddingRight = UDim.new(0, 6), UDim.new(0, 6)
 
+local listScale = Instance.new("UIScale")
+listScale.Parent = list
+
+local listOpen = false
+local setList -- declarada aqui porque os itens da lista usam ela
+
 local function refreshList()
 	for _, c in ipairs(list:GetChildren()) do
 		if c:IsA("TextButton") then c:Destroy() end
 	end
-	local found = false
+	local found, n = false, 0
 	for _, p in ipairs(Players:GetPlayers()) do
 		if p ~= player then
 			if p == selectedPlayer then found = true end
+			n += 1
 			local b = Instance.new("TextButton")
 			b.Size = UDim2.new(1, 0, 0, 28)
-			b.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+			b.BackgroundColor3 = COLOR_OFF
 			b.TextColor3 = Color3.new(1, 1, 1)
 			b.TextTruncate = Enum.TextTruncate.AtEnd
 			b.Text = p.DisplayName .. " (@" .. p.Name .. ")"
+			b.BackgroundTransparency = 1
+			b.TextTransparency = 1
 			b.Parent = list
 			Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+			addPress(b)
+
+			-- cada item aparece com um pequeno atraso
+			task.delay((n - 1) * 0.04, function()
+				if b.Parent then
+					tween(b, 0.25, { BackgroundTransparency = 0, TextTransparency = 0 })
+				end
+			end)
+
 			b.Activated:Connect(function()
 				selectedPlayer = p
 				selectBtn.Text = p.DisplayName
-				list.Visible = false
+				setList(false)
 			end)
 		end
 	end
@@ -353,18 +569,39 @@ local function refreshList()
 	end
 end
 
-selectBtn.Activated:Connect(function()
-	refreshList()
-	-- abre à direita; se não couber na tela, abre à esquerda
-	local screenW = gui.AbsoluteSize.X
-	if bubble.AbsolutePosition.X + PANEL_W + 6 + LIST_W > screenW then
-		list.Position = UDim2.fromOffset(-LIST_W - 6, selY)
+setList = function(open)
+	listOpen = open
+	if open then
+		refreshList()
+		-- abre à direita; se não couber na tela, abre à esquerda
+		local screenW = gui.AbsoluteSize.X
+		if bubble.AbsolutePosition.X + PANEL_W + 6 + LIST_W > screenW then
+			list.Position = UDim2.fromOffset(-LIST_W - 6, LIST_Y)
+		else
+			list.Position = UDim2.fromOffset(PANEL_W + 6, LIST_Y)
+		end
+		list.Visible = true
+		listScale.Scale = 0.7
+		tween(listScale, 0.28, { Scale = 1 }, Enum.EasingStyle.Back)
 	else
-		list.Position = UDim2.fromOffset(PANEL_W + 6, selY)
+		local t = tween(listScale, 0.12, { Scale = 0.7 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+		t.Completed:Connect(function()
+			if not listOpen then list.Visible = false end
+		end)
 	end
-	list.Visible = not list.Visible
+end
+
+selectBtn.Activated:Connect(function()
+	setList(not listOpen)
 end)
-refreshBtn.Activated:Connect(refreshList)
+
+refreshBtn.Activated:Connect(function()
+	refreshList()
+	refreshBtn.Rotation = 0
+	tween(refreshBtn, 0.4, { Rotation = 360 }, Enum.EasingStyle.Quad)
+		.Completed:Connect(function() refreshBtn.Rotation = 0 end)
+end)
+
 Players.PlayerAdded:Connect(refreshList)
 Players.PlayerRemoving:Connect(function() task.defer(refreshList) end)
 
@@ -379,11 +616,31 @@ end)
 
 refreshList()
 
+-- ===== ABRIR / FECHAR O PAINEL (com animação) =====
+local panelOpen = false
+local function setPanel(open)
+	panelOpen = open
+	bubble.Text = open and "–" or "+"
+	tween(bubble, 0.25, {
+		BackgroundColor3 = open and Color3.fromRGB(70, 70, 70) or Color3.fromRGB(40, 40, 40),
+	})
+	if open then
+		panel.Visible = true
+		panelScale.Scale = 0.6
+		tween(panelScale, 0.28, { Scale = 1 }, Enum.EasingStyle.Back)
+	else
+		if listOpen then setList(false) end
+		local t = tween(panelScale, 0.15, { Scale = 0.6 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+		t.Completed:Connect(function()
+			if not panelOpen then panel.Visible = false end
+		end)
+	end
+end
+
 -- ===== ARRASTAR A BOLINHA / CLICAR ABRE O MENU =====
 local dragging, startPos, startInput, moved
 bubble.InputBegan:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton1
-		or input.UserInputType == Enum.UserInputType.Touch then
+	if isPress(input) then
 		dragging, moved = true, false
 		startPos, startInput = bubble.Position, input.Position
 	end
@@ -397,13 +654,19 @@ UIS.InputChanged:Connect(function(input)
 	end
 end)
 UIS.InputEnded:Connect(function(input)
-	if dragging and (input.UserInputType == Enum.UserInputType.MouseButton1
-		or input.UserInputType == Enum.UserInputType.Touch) then
+	if dragging and isPress(input) then
 		dragging = false
 		if not moved then
-			panel.Visible = not panel.Visible
-			if not panel.Visible then list.Visible = false end
-			bubble.Text = panel.Visible and "–" or "+"
+			setPanel(not panelOpen)
 		end
 	end
+end)
+
+-- ===== INICIA: INTRO DO BEIJO, DEPOIS A BOLINHA "+" =====
+task.spawn(function()
+	playIntro(function()
+		bubble.Visible = true
+		bubbleScale.Scale = 0.01
+		tween(bubbleScale, 0.5, { Scale = 1 }, Enum.EasingStyle.Back)
+	end)
 end)
