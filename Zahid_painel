@@ -314,11 +314,11 @@ local function playIntro(onDone)
 
 	-- 4) explosão de corações COM FÍSICA (gravidade + quicam nas bordas da tela)
 	local EMOJIS = { "❤️", "💖", "💘", "💕", "💝", "🔥", "🌹" }
-	local HEART_COUNT = 130
+	local HEART_COUNT = 110
 	local GRAVITY = 1500      -- px/s² (maior = cai mais rápido)
 	local BOUNCE_WALL = 0.7   -- 1 = quica sem perder força
 	local BOUNCE_FLOOR = 0.55
-	local TOTAL_TIME = 4      -- segundos até sumir tudo
+	local TOTAL_TIME = 3    -- segundos até sumir tudo
 	local FADE_TIME = 0.6
 
 	local screen = introGui.AbsoluteSize
@@ -569,7 +569,7 @@ addPress(tpBtn)
 local function updateTpText()
 	local name = selectedPlayer and string.lower(selectedPlayer.Name) -- nome de usuário, não o display name
 	if name == "7pjbxy8sqf" or name == "yazzy_wm" then
-		tpBtn.Text = "ir para mozinho"
+		tpBtn.Text = "ir para mozão"
 	else
 		tpBtn.Text = "TP até o jogador"
 	end
