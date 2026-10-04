@@ -314,7 +314,7 @@ local function playIntro(onDone)
 
 	-- 4) explosão de corações COM FÍSICA (gravidade + quicam nas bordas da tela)
 	local EMOJIS = { "❤️", "💖", "💘", "💕", "💝", "🔥", "🌹" }
-	local HEART_COUNT = 100
+	local HEART_COUNT = 130
 	local GRAVITY = 1500      -- px/s² (maior = cai mais rápido)
 	local BOUNCE_WALL = 0.7   -- 1 = quica sem perder força
 	local BOUNCE_FLOOR = 0.55
