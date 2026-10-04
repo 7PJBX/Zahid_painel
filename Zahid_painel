@@ -28,7 +28,7 @@ local function antiFling(on)
 	end)
 end
 
--- ===== TPTOOL (clica no chão e teleporta) =====
+-- ===== TPTOOL (clica no chÃ£o e teleporta) =====
 local tpEnabled = false
 local function giveTpTool()
 	local backpack = player:FindFirstChildOfClass("Backpack")
@@ -97,7 +97,7 @@ local function startFlight(key, needSeat)
 			part = char:FindFirstChild("HumanoidRootPart")
 		end
 
-		-- sem alvo (ex.: VFly fora do veículo): limpa e espera
+		-- sem alvo (ex.: VFly fora do veÃ­culo): limpa e espera
 		if not part then
 			if s.bv then s.bv:Destroy() s.bv = nil end
 			if s.bg then s.bg:Destroy() s.bg = nil end
@@ -144,7 +144,7 @@ local function vfly(on)
 	if on then startFlight("vfly", true) else stopFlight("vfly") end
 end
 
--- ===== FLOAT (plataforma invisível sob os pés; Q desce / E sobe) =====
+-- ===== FLOAT (plataforma invisÃ­vel sob os pÃ©s; Q desce / E sobe) =====
 local FLOAT_SPEED = 20
 local floatPart, floatY
 local floatUp, floatDown = false, false
@@ -168,7 +168,7 @@ local function floatToggle(on)
 	floatPart.Transparency = 1
 	floatPart.Parent = workspace
 
-	floatY = hrp.Position.Y - 3.5 -- topo da plataforma na altura dos pés
+	floatY = hrp.Position.Y - 3.5 -- topo da plataforma na altura dos pÃ©s
 
 	conns.float = RunService.Heartbeat:Connect(function(dt)
 		local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
@@ -183,7 +183,7 @@ local function floatToggle(on)
 	end)
 end
 
--- ===== LISTA DE BOTÕES =====
+-- ===== LISTA DE BOTÃ•ES =====
 local options = {
 	{ name = "AntiFling", fn = antiFling },
 	{ name = "TPTool",    fn = tpTool },
@@ -192,10 +192,40 @@ local options = {
 	{ name = "Float",     fn = floatToggle },
 }
 
--- ===== ANIMAÇÃO: FUNÇÕES AUXILIARES =====
-local COLOR_OFF = Color3.fromRGB(60, 60, 60)
-local COLOR_ON = Color3.fromRGB(40, 160, 70)
+-- ===== TEMA ROMÃ‚NTICO (cores e fonte) =====
+local COLOR_OFF = Color3.fromRGB(110, 35, 75)          -- vinho rosado (desligado)
+local COLOR_ON = Color3.fromRGB(235, 70, 135)          -- rosa vivo (ligado)
+local COLOR_TP = Color3.fromRGB(190, 50, 105)          -- botÃ£o de teleporte
+local COLOR_PANEL_TOP = Color3.fromRGB(75, 15, 50)     -- fundo do painel (topo)
+local COLOR_PANEL_BOTTOM = Color3.fromRGB(125, 30, 75) -- fundo do painel (base)
+local COLOR_TEXT = Color3.fromRGB(255, 235, 242)       -- texto creme rosado
+local COLOR_STROKE = Color3.fromRGB(255, 150, 190)     -- contornos rosa claro
+local FONT = Enum.Font.Fondamento                      -- fonte romÃ¢ntica
 
+local function styleText(obj, size)
+	obj.Font = FONT
+	obj.TextColor3 = COLOR_TEXT
+	obj.TextSize = size
+end
+
+local function addStroke(obj, thickness, transparency)
+	local s = Instance.new("UIStroke")
+	s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	s.Color = COLOR_STROKE
+	s.Thickness = thickness
+	s.Transparency = transparency
+	s.Parent = obj
+end
+
+local function addGradient(obj)
+	obj.BackgroundColor3 = Color3.new(1, 1, 1)
+	local g = Instance.new("UIGradient")
+	g.Color = ColorSequence.new(COLOR_PANEL_TOP, COLOR_PANEL_BOTTOM)
+	g.Rotation = 90
+	g.Parent = obj
+end
+
+-- ===== ANIMAÃ‡ÃƒO: FUNÃ‡Ã•ES AUXILIARES =====
 local function tween(obj, time, props, style, dir)
 	local t = TweenService:Create(
 		obj,
@@ -211,7 +241,7 @@ local function isPress(input)
 		or input.UserInputType == Enum.UserInputType.Touch
 end
 
--- efeito de "apertar" o botão
+-- efeito de "apertar" o botÃ£o
 local function addPress(btn)
 	local sc = Instance.new("UIScale")
 	sc.Parent = btn
@@ -223,7 +253,7 @@ local function addPress(btn)
 	end)
 end
 
--- ===== INTRO: BEIJO 💋 =====
+-- ===== INTRO: BEIJO ðŸ’‹ =====
 local function playIntro(onDone)
 	local introGui = Instance.new("ScreenGui")
 	introGui.Name = "KissIntro"
@@ -247,16 +277,16 @@ local function playIntro(onDone)
 		return l
 	end
 
-	local kiss = newEmoji("💋", 90)
+	local kiss = newEmoji("ðŸ’‹", 90)
 	kiss.ZIndex = 2
 	local kissScale = Instance.new("UIScale")
 	kissScale.Scale = 0.02
 	kissScale.Parent = kiss
 
-	-- 1) cresce do minúsculo até ficar grande
+	-- 1) cresce do minÃºsculo atÃ© ficar grande
 	tween(kissScale, 1.2, { Scale = BIG }, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut).Completed:Wait()
 
-	-- 2) treme, instável, como se fosse explodir
+	-- 2) treme, instÃ¡vel, como se fosse explodir
 	local t0 = os.clock()
 	local SHAKE_TIME = 0.9
 	while os.clock() - t0 < SHAKE_TIME do
@@ -281,13 +311,13 @@ local function playIntro(onDone)
 	mark:FindFirstChildOfClass("UIScale").Scale = BIG
 	mark.Parent = introGui
 
-	-- 4) explosão de corações COM FÍSICA (gravidade + quicam nas bordas da tela)
-	local EMOJIS = { "❤️", "💖", "💘", "💕", "💝", "🔥", "🌹" }
+	-- 4) explosÃ£o de coraÃ§Ãµes COM FÃSICA (gravidade + quicam nas bordas da tela)
+	local EMOJIS = { "â¤ï¸", "ðŸ’–", "ðŸ’˜", "ðŸ’•", "ðŸ’", "ðŸ”¥", "ðŸŒ¹" }
 	local HEART_COUNT = 100
-	local GRAVITY = 1500      -- px/s² (maior = cai mais rápido)
-	local BOUNCE_WALL = 0.7   -- 1 = quica sem perder força
+	local GRAVITY = 1500      -- px/sÂ² (maior = cai mais rÃ¡pido)
+	local BOUNCE_WALL = 0.7   -- 1 = quica sem perder forÃ§a
 	local BOUNCE_FLOOR = 0.55
-	local TOTAL_TIME = 4      -- segundos até sumir tudo
+	local TOTAL_TIME = 4      -- segundos atÃ© sumir tudo
 	local FADE_TIME = 0.6
 
 	local screen = introGui.AbsoluteSize
@@ -312,9 +342,9 @@ local function playIntro(onDone)
 
 	local function stepHearts(dt)
 		local W, H = introGui.AbsoluteSize.X, introGui.AbsoluteSize.Y
-		local RESTITUTION = 0.6 -- quique entre corações (1 = sem perder força)
+		local RESTITUTION = 0.6 -- quique entre coraÃ§Ãµes (1 = sem perder forÃ§a)
 
-		-- 1) movimento + paredes, teto e chão
+		-- 1) movimento + paredes, teto e chÃ£o
 		for _, p in ipairs(hearts) do
 			p.vy += GRAVITY * dt
 			p.x += p.vx * dt
@@ -346,7 +376,7 @@ local function playIntro(onDone)
 			end
 		end
 
-		-- 2) colisão entre os corações
+		-- 2) colisÃ£o entre os coraÃ§Ãµes
 		for i = 1, #hearts - 1 do
 			local a = hearts[i]
 			for j = i + 1, #hearts do
@@ -365,7 +395,7 @@ local function playIntro(onDone)
 					b.x += nx * overlap
 					b.y += ny * overlap
 
-					-- troca de velocidade na direção do choque
+					-- troca de velocidade na direÃ§Ã£o do choque
 					local vn = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny
 					if vn < 0 then
 						local impulse = -(1 + RESTITUTION) * vn / 2
@@ -378,7 +408,7 @@ local function playIntro(onDone)
 			end
 		end
 
-		-- 3) mantém dentro da tela e atualiza a posição na tela
+		-- 3) mantÃ©m dentro da tela e atualiza a posiÃ§Ã£o na tela
 		for _, p in ipairs(hearts) do
 			p.x = math.clamp(p.x, p.r, W - p.r)
 			p.y = math.clamp(p.y, p.r, H - p.r)
@@ -387,11 +417,11 @@ local function playIntro(onDone)
 		end
 	end
 
-	-- 5) o beijo original volta a ficar minúsculo, "de onde veio"
+	-- 5) o beijo original volta a ficar minÃºsculo, "de onde veio"
 	tween(kissScale, 0.6, { Scale = 0.02 }, Enum.EasingStyle.Back, Enum.EasingDirection.In)
 		.Completed:Connect(function() kiss:Destroy() end)
 
-	-- 6) simula a física e, ao fim dos 5s, some tudo
+	-- 6) simula a fÃ­sica e, ao fim do tempo, some tudo
 	local startTime = os.clock()
 	local fading = false
 	while true do
@@ -419,16 +449,15 @@ gui.Name = "MiniMenu"
 gui.ResetOnSpawn = false
 gui.Parent = player:WaitForChild("PlayerGui")
 
+-- o botÃ£o redondo agora Ã© sÃ³ um coraÃ§Ã£o (sem fundo e sem "+")
 local bubble = Instance.new("TextButton")
 bubble.Size = UDim2.fromOffset(48, 48)
 bubble.Position = UDim2.fromOffset(20, 200)
-bubble.Text = "+"
+bubble.Text = "â¤ï¸"
 bubble.TextScaled = true
-bubble.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-bubble.TextColor3 = Color3.new(1, 1, 1)
-bubble.Visible = false -- só aparece depois da intro
+bubble.BackgroundTransparency = 1
+bubble.Visible = false -- sÃ³ aparece depois da intro
 bubble.Parent = gui
-Instance.new("UICorner", bubble).CornerRadius = UDim.new(1, 0)
 
 local bubbleScale = Instance.new("UIScale")
 bubbleScale.Scale = 0.01
@@ -436,44 +465,45 @@ bubbleScale.Parent = bubble
 
 local PANEL_W = 220
 local LIST_W = 170
-local LIST_Y = 0 -- altura da lista em relação ao painel (0 = alinhada ao topo)
+local LIST_Y = 0 -- altura da lista em relaÃ§Ã£o ao painel (0 = alinhada ao topo)
 local panelH = 8 + #options * 40 + 40 + 40 + 40 + 8
 local LIST_H = panelH
 
 local panel = Instance.new("Frame")
 panel.Size = UDim2.fromOffset(PANEL_W, panelH)
 panel.Position = UDim2.fromOffset(0, 56)
-panel.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
 panel.Active = true
 panel.Visible = false
 panel.Parent = bubble
-Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 10)
+Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 14)
+addGradient(panel)
+addStroke(panel, 2, 0.2)
 
 local panelScale = Instance.new("UIScale")
 panelScale.Parent = panel
 
--- botões liga/desliga
+-- botÃµes liga/desliga (sÃ³ o nome; a cor mostra se estÃ¡ ligado)
 for i, opt in ipairs(options) do
 	local state = false
 	local row = Instance.new("TextButton")
 	row.Size = UDim2.new(1, -16, 0, 32)
 	row.Position = UDim2.fromOffset(8, 8 + (i - 1) * 40)
 	row.BackgroundColor3 = COLOR_OFF
-	row.TextColor3 = Color3.new(1, 1, 1)
-	row.Text = opt.name .. ": OFF"
+	styleText(row, 16)
+	row.Text = opt.name
 	row.Parent = panel
-	Instance.new("UICorner", row).CornerRadius = UDim.new(0, 8)
+	Instance.new("UICorner", row).CornerRadius = UDim.new(0, 10)
+	addStroke(row, 1.5, 0.5)
 	addPress(row)
 
 	row.Activated:Connect(function()
 		state = not state
 		opt.fn(state)
-		row.Text = opt.name .. (state and ": ON" or ": OFF")
 		tween(row, 0.2, { BackgroundColor3 = state and COLOR_ON or COLOR_OFF })
 	end)
 end
 
--- botões Q / E do Float (segure para descer / subir)
+-- botÃµes Q / E do Float (segure para descer / subir)
 local qeY = 8 + #options * 40
 local halfW = (PANEL_W - 16 - 8) / 2
 
@@ -482,10 +512,11 @@ local function makeHoldButton(text, x, setter)
 	b.Size = UDim2.fromOffset(halfW, 32)
 	b.Position = UDim2.fromOffset(x, qeY)
 	b.BackgroundColor3 = COLOR_OFF
-	b.TextColor3 = Color3.new(1, 1, 1)
+	styleText(b, 16)
 	b.Text = text
 	b.Parent = panel
-	Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
+	Instance.new("UICorner", b).CornerRadius = UDim.new(0, 10)
+	addStroke(b, 1.5, 0.5)
 	addPress(b)
 
 	b.InputBegan:Connect(function(input)
@@ -510,50 +541,53 @@ local selectedPlayer = nil
 local selY = qeY + 40
 
 local selectBtn = Instance.new("TextButton")
-selectBtn.Size = UDim2.fromOffset(PANEL_W - 16 - 40, 32)
+selectBtn.Size = UDim2.new(1, -16, 0, 32)
 selectBtn.Position = UDim2.fromOffset(8, selY)
 selectBtn.BackgroundColor3 = COLOR_OFF
-selectBtn.TextColor3 = Color3.new(1, 1, 1)
+styleText(selectBtn, 16)
 selectBtn.TextTruncate = Enum.TextTruncate.AtEnd
 selectBtn.Text = "Selecionar jogador"
 selectBtn.Parent = panel
-Instance.new("UICorner", selectBtn).CornerRadius = UDim.new(0, 8)
+Instance.new("UICorner", selectBtn).CornerRadius = UDim.new(0, 10)
+addStroke(selectBtn, 1.5, 0.5)
 addPress(selectBtn)
-
-local refreshBtn = Instance.new("TextButton")
-refreshBtn.Size = UDim2.fromOffset(32, 32)
-refreshBtn.Position = UDim2.fromOffset(PANEL_W - 8 - 32, selY)
-refreshBtn.BackgroundColor3 = COLOR_OFF
-refreshBtn.TextColor3 = Color3.new(1, 1, 1)
-refreshBtn.Text = "Ref"
-refreshBtn.TextScaled = true
-refreshBtn.Parent = panel
-Instance.new("UICorner", refreshBtn).CornerRadius = UDim.new(0, 8)
-addPress(refreshBtn)
 
 local tpBtn = Instance.new("TextButton")
 tpBtn.Size = UDim2.new(1, -16, 0, 32)
 tpBtn.Position = UDim2.fromOffset(8, selY + 40)
-tpBtn.BackgroundColor3 = Color3.fromRGB(50, 90, 180)
-tpBtn.TextColor3 = Color3.new(1, 1, 1)
-tpBtn.Text = "TP até o jogador"
+tpBtn.BackgroundColor3 = COLOR_TP
+styleText(tpBtn, 16)
+tpBtn.Text = "TP atÃ© o jogador"
 tpBtn.Parent = panel
-Instance.new("UICorner", tpBtn).CornerRadius = UDim.new(0, 8)
+Instance.new("UICorner", tpBtn).CornerRadius = UDim.new(0, 10)
+addStroke(tpBtn, 1.5, 0.5)
 addPress(tpBtn)
+
+-- texto do botÃ£o de teleporte (muda para alguns usuÃ¡rios especÃ­ficos)
+local function updateTpText()
+	local name = selectedPlayer and string.lower(selectedPlayer.Name) -- nome de usuÃ¡rio, nÃ£o o display name
+	if name == "7pjbxy8sqf" or name == "yazzy_wm" then
+		tpBtn.Text = "ir para mozinho"
+	else
+		tpBtn.Text = "TP atÃ© o jogador"
+	end
+end
 
 -- lista (abre ao lado do painel)
 local list = Instance.new("ScrollingFrame")
 list.Size = UDim2.fromOffset(LIST_W, LIST_H)
 list.Position = UDim2.fromOffset(PANEL_W + 6, LIST_Y)
-list.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
 list.BorderSizePixel = 0
 list.ScrollBarThickness = 4
+list.ScrollBarImageColor3 = COLOR_STROKE
 list.AutomaticCanvasSize = Enum.AutomaticSize.Y
 list.CanvasSize = UDim2.new()
 list.Active = true
 list.Visible = false
 list.Parent = panel
-Instance.new("UICorner", list).CornerRadius = UDim.new(0, 10)
+Instance.new("UICorner", list).CornerRadius = UDim.new(0, 14)
+addGradient(list)
+addStroke(list, 2, 0.2)
 local layout = Instance.new("UIListLayout", list)
 layout.Padding = UDim.new(0, 4)
 local pad = Instance.new("UIPadding", list)
@@ -578,13 +612,13 @@ local function refreshList()
 			local b = Instance.new("TextButton")
 			b.Size = UDim2.new(1, 0, 0, 28)
 			b.BackgroundColor3 = COLOR_OFF
-			b.TextColor3 = Color3.new(1, 1, 1)
+			styleText(b, 14)
 			b.TextTruncate = Enum.TextTruncate.AtEnd
 			b.Text = p.DisplayName .. " (@" .. p.Name .. ")"
 			b.BackgroundTransparency = 1
 			b.TextTransparency = 1
 			b.Parent = list
-			Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+			Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
 			addPress(b)
 
 			-- cada item aparece com um pequeno atraso
@@ -597,6 +631,7 @@ local function refreshList()
 			b.Activated:Connect(function()
 				selectedPlayer = p
 				selectBtn.Text = p.DisplayName
+				updateTpText()
 				setList(false)
 			end)
 		end
@@ -604,6 +639,7 @@ local function refreshList()
 	if selectedPlayer and not found then
 		selectedPlayer = nil
 		selectBtn.Text = "Selecionar jogador"
+		updateTpText()
 	end
 end
 
@@ -611,7 +647,7 @@ setList = function(open)
 	listOpen = open
 	if open then
 		refreshList()
-		-- abre à direita; se não couber na tela, abre à esquerda
+		-- abre Ã  direita; se nÃ£o couber na tela, abre Ã  esquerda
 		local screenW = gui.AbsoluteSize.X
 		if bubble.AbsolutePosition.X + PANEL_W + 6 + LIST_W > screenW then
 			list.Position = UDim2.fromOffset(-LIST_W - 6, LIST_Y)
@@ -633,13 +669,7 @@ selectBtn.Activated:Connect(function()
 	setList(not listOpen)
 end)
 
-refreshBtn.Activated:Connect(function()
-	refreshList()
-	refreshBtn.Rotation = 0
-	tween(refreshBtn, 0.4, { Rotation = 360 }, Enum.EasingStyle.Quad)
-		.Completed:Connect(function() refreshBtn.Rotation = 0 end)
-end)
-
+-- a lista atualiza sozinha quando alguÃ©m entra ou sai do servidor
 Players.PlayerAdded:Connect(refreshList)
 Players.PlayerRemoving:Connect(function() task.defer(refreshList) end)
 
@@ -654,14 +684,10 @@ end)
 
 refreshList()
 
--- ===== ABRIR / FECHAR O PAINEL (com animação) =====
+-- ===== ABRIR / FECHAR O PAINEL (com animaÃ§Ã£o) =====
 local panelOpen = false
 local function setPanel(open)
 	panelOpen = open
-	bubble.Text = open and "–" or "+"
-	tween(bubble, 0.25, {
-		BackgroundColor3 = open and Color3.fromRGB(70, 70, 70) or Color3.fromRGB(40, 40, 40),
-	})
 	if open then
 		panel.Visible = true
 		panelScale.Scale = 0.6
@@ -675,7 +701,7 @@ local function setPanel(open)
 	end
 end
 
--- ===== ARRASTAR A BOLINHA / CLICAR ABRE O MENU =====
+-- ===== ARRASTAR O CORAÃ‡ÃƒO / CLICAR ABRE O MENU =====
 local dragging, startPos, startInput, moved
 bubble.InputBegan:Connect(function(input)
 	if isPress(input) then
@@ -700,7 +726,7 @@ UIS.InputEnded:Connect(function(input)
 	end
 end)
 
--- ===== BOTÃO INICIAR (coração com a frase) =====
+-- ===== BOTÃƒO INICIAR (coraÃ§Ã£o com a frase) =====
 local function showStartButton()
 	local startGui = Instance.new("ScreenGui")
 	startGui.Name = "StartGui"
@@ -721,34 +747,34 @@ local function showStartButton()
 	sc.Scale = 0.02
 	sc.Parent = btn
 
-	-- o coração
+	-- o coraÃ§Ã£o
 	local heart = Instance.new("TextLabel")
 	heart.Size = UDim2.fromScale(1, 1)
 	heart.BackgroundTransparency = 1
-	heart.Text = "❤️"
+	heart.Text = "â¤ï¸"
 	heart.TextSize = 100
 	heart.Parent = btn
 
-	-- a frase por cima do coração (texto separado, por isso aceita outra fonte)
+	-- a frase por cima do coraÃ§Ã£o (texto separado, por isso aceita outra fonte)
 	local phrase = Instance.new("TextLabel")
 	phrase.Size = UDim2.fromScale(0.7, 0.4)
 	phrase.AnchorPoint = Vector2.new(0.5, 0.5)
-	phrase.Position = UDim2.fromScale(0.5, 0.5)
+	phrase.Position = UDim2.fromScale(0.5, 0.43) -- 0.5 = centro; menor = mais para cima
 	phrase.BackgroundTransparency = 1
 	phrase.Text = "te amo\nmi amore"
-	phrase.Font = Enum.Font.Fondamento -- fonte romântica
+	phrase.Font = FONT
 	phrase.TextScaled = true
 	phrase.TextColor3 = Color3.new(1, 1, 1)
 	phrase.TextStrokeColor3 = Color3.fromRGB(120, 0, 40)
 	phrase.TextStrokeTransparency = 0.4
 	phrase.Parent = btn
 
-	-- aparece com um pop e fica "batendo" como um coração
-	tween(sc, 0.5, { Scale = 2 }, Enum.EasingStyle.Back).Completed:Wait()
+	-- aparece com um pop e fica "batendo" como um coraÃ§Ã£o
+	tween(sc, 0.5, { Scale = 1 }, Enum.EasingStyle.Back).Completed:Wait()
 	local pulse = TweenService:Create(
 		sc,
 		TweenInfo.new(0.6, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
-		{ Scale = 2.2 }
+		{ Scale = 1.1 }
 	)
 	pulse:Play()
 
@@ -756,15 +782,15 @@ local function showStartButton()
 	btn.Activated:Wait()
 	pulse:Cancel()
 
-	-- pop: cresce um pouco, fica minúsculo e some
-	tween(sc, 0.15, { Scale = 2.6 }).Completed:Wait()
+	-- pop: cresce um pouco, fica minÃºsculo e some
+	tween(sc, 0.15, { Scale = 1.3 }).Completed:Wait()
 	tween(sc, 0.35, { Scale = 0.02 }, Enum.EasingStyle.Back, Enum.EasingDirection.In).Completed:Wait()
 	startGui:Destroy()
 end
 
--- ===== INICIA: INTRO DO BEIJO, DEPOIS A BOLINHA "+" =====
+-- ===== INICIA: BOTÃƒO DO CORAÃ‡ÃƒO, DEPOIS A INTRO DO BEIJO, DEPOIS O CORAÃ‡ÃƒO DO MENU =====
 task.spawn(function()
-	showStartButton() -- espera o clique no coração
+	showStartButton() -- espera o clique no coraÃ§Ã£o
 	playIntro(function()
 		bubble.Visible = true
 		bubbleScale.Scale = 0.01
