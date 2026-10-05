@@ -2,7 +2,6 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
-local TeleportService = game:GetService("TeleportService")
 local player = Players.LocalPlayer
 
 local conns = {}
@@ -184,7 +183,54 @@ local function floatToggle(on)
 	end)
 end
 
--- ===== RE (regenera o personagem e volta para o ultimo lugar) =====
+-- ===== ANTI-EMPURRÃO (se algo te empurrar, você volta ao lugar) =====
+local PUSH_TOLERANCE = 10 -- velocidade extra tolerada acima do que o seu controle gera (menor = mais sensível)
+
+local function antiPush(on)
+	if conns.antipush then conns.antipush:Disconnect() conns.antipush = nil end
+	if not on then return end
+
+	local safeCF = nil -- última posição segura (antes do empurrão)
+	conns.antipush = RunService.Heartbeat:Connect(function()
+		local char = player.Character
+		local hrp = char and char:FindFirstChild("HumanoidRootPart")
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		if not hrp or not hum or hum.Health <= 0 then
+			safeCF = nil
+			return
+		end
+
+		-- situações em que não dá para saber o que é empurrão: só acompanha a posição
+		local state = hum:GetState()
+		if hum.SeatPart or hum.PlatformStand
+			or state == Enum.HumanoidStateType.Climbing
+			or state == Enum.HumanoidStateType.Swimming
+			or state == Enum.HumanoidStateType.Seated
+			or flyState.fly or flyState.vfly or floatPart then
+			safeCF = hrp.CFrame
+			return
+		end
+
+		-- compara a velocidade real com a que o seu controle deveria gerar
+		local vel = hrp.AssemblyLinearVelocity
+		local horizontal = Vector3.new(vel.X, 0, vel.Z).Magnitude
+		local expected = hum.MoveDirection.Magnitude * hum.WalkSpeed
+		local jumpSpeed = hum.UseJumpPower and hum.JumpPower or 60
+		local pushed = horizontal > expected + PUSH_TOLERANCE
+			or vel.Y > jumpSpeed + PUSH_TOLERANCE
+
+		if pushed and safeCF then
+			-- empurrado: para tudo e volta para o último lugar seguro
+			hrp.AssemblyLinearVelocity = Vector3.zero
+			hrp.AssemblyAngularVelocity = Vector3.zero
+			hrp.CFrame = safeCF
+		else
+			safeCF = hrp.CFrame
+		end
+	end)
+end
+
+-- ===== RE (regenera o personagem e volta para o último lugar) =====
 local reBusy = false
 local function respawnHere(onDone)
 	if reBusy then
@@ -222,31 +268,16 @@ local function respawnHere(onDone)
 
 	hum.Health = 0 -- regenera o personagem
 
-	-- seguranca: se o personagem nao voltar em 15s, libera o botao
+	-- segurança: se o personagem não voltar em 15s, libera o botão
 	task.delay(15, function()
 		if reBusy then finish() end
 	end)
 end
 
--- ===== SERVER HOP (troca de servidor) =====
--- Funciona so no jogo publicado (no Studio o teleporte nao roda).
--- O Roblox escolhe o servidor de destino.
-local function serverHop()
-	if RunService:IsStudio() then
-		return false, "Só no jogo publicado"
-	end
-	local ok = pcall(function()
-		TeleportService:Teleport(game.PlaceId, player)
-	end)
-	if ok then
-		return true
-	end
-	return false, "Não foi possível"
-end
-
 -- ===== LISTA DE BOTÕES =====
 local options = {
 	{ name = "AntiFling", fn = antiFling },
+	{ name = "Anti-Empurrão", fn = antiPush },
 	{ name = "TPTool",    fn = tpTool },
 	{ name = "VFly",      fn = vfly },
 	{ name = "Fly",       fn = fly },
@@ -379,7 +410,7 @@ local function playIntro(onDone)
 	local GRAVITY = 1500      -- px/s² (maior = cai mais rápido)
 	local BOUNCE_WALL = 0.7   -- 1 = quica sem perder força
 	local BOUNCE_FLOOR = 0.55
-	local TOTAL_TIME = 2    -- segundos até sumir tudo
+	local TOTAL_TIME = 3    -- segundos até sumir tudo
 	local FADE_TIME = 0.6
 
 	local screen = introGui.AbsoluteSize
@@ -540,9 +571,8 @@ local function rowY(index)
 end
 local ROW_QE = #options + 1
 local ROW_RE = #options + 2
-local ROW_HOP = #options + 3
-local ROW_SELECT = #options + 4
-local ROW_TP = #options + 5
+local ROW_SELECT = #options + 3
+local ROW_TP = #options + 4
 local CONTENT_H = rowY(ROW_TP) + ROW_H + 6 -- altura total do conteúdo rolável
 
 local panel = Instance.new("Frame")
@@ -651,24 +681,6 @@ reBtn = makeActionButton("Re", ROW_RE, COLOR_OFF, function()
 		tween(reBtn, 0.25, { BackgroundColor3 = COLOR_OFF })
 	end)
 end)
-
--- SERVER HOP: troca de servidor
-local hopBtn
-hopBtn = makeActionButton("Server Hop", ROW_HOP, COLOR_OFF, function()
-	local ok, msg = serverHop()
-	if ok then
-		hopBtn.Text = "Procurando..."
-	else
-		hopBtn.Text = msg
-		task.delay(2, function()
-			hopBtn.Text = "Server Hop"
-		end)
-	end
-end)
-hopBtn.TextScaled = true -- mensagens longas se ajustam ao botão
-local hopLimit = Instance.new("UITextSizeConstraint")
-hopLimit.MaxTextSize = 16
-hopLimit.Parent = hopBtn
 
 -- seletor de jogador
 local selectedPlayer = nil
