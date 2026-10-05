@@ -379,7 +379,7 @@ local function playIntro(onDone)
 	local GRAVITY = 1500      -- px/s² (maior = cai mais rápido)
 	local BOUNCE_WALL = 0.7   -- 1 = quica sem perder força
 	local BOUNCE_FLOOR = 0.55
-	local TOTAL_TIME = 3    -- segundos até sumir tudo
+	local TOTAL_TIME = 2    -- segundos até sumir tudo
 	local FADE_TIME = 0.6
 
 	local screen = introGui.AbsoluteSize
