@@ -8,14 +8,32 @@ local conns = {}
 local flyState = {}
 
 -- ===== ANTIFLING =====
+local antiFlingSaved = setmetatable({}, { __mode = "k" }) -- guarda a colisão original de cada part
+
 local function antiFling(on)
 	if conns.antifling then conns.antifling:Disconnect() conns.antifling = nil end
-	if not on then return end
+
+	if not on then
+		-- desligou: devolve a colisão original de tudo que foi alterado
+		for part, original in pairs(antiFlingSaved) do
+			if part.Parent then
+				part.CanCollide = original
+			end
+			antiFlingSaved[part] = nil
+		end
+		return
+	end
+
 	conns.antifling = RunService.Stepped:Connect(function()
 		for _, p in ipairs(Players:GetPlayers()) do
 			if p ~= player and p.Character then
 				for _, part in ipairs(p.Character:GetDescendants()) do
-					if part:IsA("BasePart") then part.CanCollide = false end
+					if part:IsA("BasePart") then
+						if antiFlingSaved[part] == nil then
+							antiFlingSaved[part] = part.CanCollide -- guarda o valor original
+						end
+						part.CanCollide = false
+					end
 				end
 			end
 		end
