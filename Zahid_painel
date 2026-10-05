@@ -29,7 +29,7 @@ local function antiFling(on)
 	end)
 end
 
--- ===== TPTOOL (clica no chÃ£o e teleporta) =====
+-- ===== TPTOOL (clica no chão e teleporta) =====
 local tpEnabled = false
 local function giveTpTool()
 	local backpack = player:FindFirstChildOfClass("Backpack")
@@ -98,7 +98,7 @@ local function startFlight(key, needSeat)
 			part = char:FindFirstChild("HumanoidRootPart")
 		end
 
-		-- sem alvo (ex.: VFly fora do veÃ­culo): limpa e espera
+		-- sem alvo (ex.: VFly fora do veículo): limpa e espera
 		if not part then
 			if s.bv then s.bv:Destroy() s.bv = nil end
 			if s.bg then s.bg:Destroy() s.bg = nil end
@@ -145,7 +145,7 @@ local function vfly(on)
 	if on then startFlight("vfly", true) else stopFlight("vfly") end
 end
 
--- ===== FLOAT (plataforma invisÃ­vel sob os pÃ©s; Q desce / E sobe) =====
+-- ===== FLOAT (plataforma invisível sob os pés; Q desce / E sobe) =====
 local FLOAT_SPEED = 20
 local floatPart, floatY
 local floatUp, floatDown = false, false
@@ -169,7 +169,7 @@ local function floatToggle(on)
 	floatPart.Transparency = 1
 	floatPart.Parent = workspace
 
-	floatY = hrp.Position.Y - 3.5 -- topo da plataforma na altura dos pÃ©s
+	floatY = hrp.Position.Y - 3.5 -- topo da plataforma na altura dos pés
 
 	conns.float = RunService.Heartbeat:Connect(function(dt)
 		local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
@@ -233,7 +233,7 @@ end
 -- O Roblox escolhe o servidor de destino.
 local function serverHop()
 	if RunService:IsStudio() then
-		return false, "SÃ³ no jogo publicado"
+		return false, "Só no jogo publicado"
 	end
 	local ok = pcall(function()
 		TeleportService:Teleport(game.PlaceId, player)
@@ -241,10 +241,10 @@ local function serverHop()
 	if ok then
 		return true
 	end
-	return false, "NÃ£o foi possÃ­vel"
+	return false, "Não foi possível"
 end
 
--- ===== LISTA DE BOTÃ•ES =====
+-- ===== LISTA DE BOTÕES =====
 local options = {
 	{ name = "AntiFling", fn = antiFling },
 	{ name = "TPTool",    fn = tpTool },
@@ -253,15 +253,15 @@ local options = {
 	{ name = "Float",     fn = floatToggle },
 }
 
--- ===== TEMA ROMÃ‚NTICO (cores e fonte) =====
+-- ===== TEMA ROMÂNTICO (cores e fonte) =====
 local COLOR_OFF = Color3.fromRGB(110, 35, 75)          -- vinho rosado (desligado)
 local COLOR_ON = Color3.fromRGB(235, 70, 135)          -- rosa vivo (ligado)
-local COLOR_TP = Color3.fromRGB(190, 50, 105)          -- botÃ£o de teleporte
+local COLOR_TP = Color3.fromRGB(190, 50, 105)          -- botão de teleporte
 local COLOR_PANEL_TOP = Color3.fromRGB(75, 15, 50)     -- fundo do painel (topo)
 local COLOR_PANEL_BOTTOM = Color3.fromRGB(125, 30, 75) -- fundo do painel (base)
 local COLOR_TEXT = Color3.fromRGB(255, 235, 242)       -- texto creme rosado
 local COLOR_STROKE = Color3.fromRGB(255, 150, 190)     -- contornos rosa claro
-local FONT = Enum.Font.Fondamento                      -- fonte romÃ¢ntica
+local FONT = Enum.Font.Fondamento                      -- fonte romântica
 
 local function styleText(obj, size)
 	obj.Font = FONT
@@ -286,7 +286,7 @@ local function addGradient(obj)
 	g.Parent = obj
 end
 
--- ===== ANIMAÃ‡ÃƒO: FUNÃ‡Ã•ES AUXILIARES =====
+-- ===== ANIMAÇÃO: FUNÇÕES AUXILIARES =====
 local function tween(obj, time, props, style, dir)
 	local t = TweenService:Create(
 		obj,
@@ -302,7 +302,7 @@ local function isPress(input)
 		or input.UserInputType == Enum.UserInputType.Touch
 end
 
--- efeito de "apertar" o botÃ£o
+-- efeito de "apertar" o botão
 local function addPress(btn)
 	local sc = Instance.new("UIScale")
 	sc.Parent = btn
@@ -314,7 +314,7 @@ local function addPress(btn)
 	end)
 end
 
--- ===== INTRO: BEIJO ðŸ’‹ =====
+-- ===== INTRO: BEIJO 💋 =====
 local function playIntro(onDone)
 	local introGui = Instance.new("ScreenGui")
 	introGui.Name = "KissIntro"
@@ -329,7 +329,7 @@ local function playIntro(onDone)
 	local function newEmoji(emoji, size)
 		local l = Instance.new("TextLabel")
 		l.BackgroundTransparency = 1
-		l.Font = Enum.Font.GothamMedium -- fonte padrÃ£o para preservar os emojis
+		l.Font = Enum.Font.GothamMedium -- fonte padrão para preservar os emojis
 		l.Text = emoji
 		l.TextSize = size
 		l.Size = UDim2.fromOffset(size + 20, size + 20)
@@ -339,16 +339,16 @@ local function playIntro(onDone)
 		return l
 	end
 
-	local kiss = newEmoji("ðŸ’‹", 90)
+	local kiss = newEmoji("💋", 90)
 	kiss.ZIndex = 2
 	local kissScale = Instance.new("UIScale")
 	kissScale.Scale = 0.02
 	kissScale.Parent = kiss
 
-	-- 1) cresce do minÃºsculo atÃ© ficar grande
+	-- 1) cresce do minúsculo até ficar grande
 	tween(kissScale, 1.2, { Scale = BIG }, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut).Completed:Wait()
 
-	-- 2) treme, instÃ¡vel, como se fosse explodir
+	-- 2) treme, instável, como se fosse explodir
 	local t0 = os.clock()
 	local SHAKE_TIME = 0.9
 	while os.clock() - t0 < SHAKE_TIME do
@@ -373,13 +373,13 @@ local function playIntro(onDone)
 	mark:FindFirstChildOfClass("UIScale").Scale = BIG
 	mark.Parent = introGui
 
-	-- 4) explosÃ£o de coraÃ§Ãµes COM FÃSICA (gravidade + quicam nas bordas da tela)
-	local EMOJIS = { "â¤ï¸", "ðŸ’–", "ðŸ’˜", "ðŸ’•", "ðŸ’", "ðŸ”¥", "ðŸŒ¹" }
+	-- 4) explosão de corações COM FÍSICA (gravidade + quicam nas bordas da tela)
+	local EMOJIS = { "❤️", "💖", "💘", "💕", "💝", "🔥", "🌹" }
 	local HEART_COUNT = 110
-	local GRAVITY = 1500      -- px/sÂ² (maior = cai mais rÃ¡pido)
-	local BOUNCE_WALL = 0.7   -- 1 = quica sem perder forÃ§a
+	local GRAVITY = 1500      -- px/s² (maior = cai mais rápido)
+	local BOUNCE_WALL = 0.7   -- 1 = quica sem perder força
 	local BOUNCE_FLOOR = 0.55
-	local TOTAL_TIME = 3    -- segundos atÃ© sumir tudo
+	local TOTAL_TIME = 3    -- segundos até sumir tudo
 	local FADE_TIME = 0.6
 
 	local screen = introGui.AbsoluteSize
@@ -404,9 +404,9 @@ local function playIntro(onDone)
 
 	local function stepHearts(dt)
 		local W, H = introGui.AbsoluteSize.X, introGui.AbsoluteSize.Y
-		local RESTITUTION = 0.6 -- quique entre coraÃ§Ãµes (1 = sem perder forÃ§a)
+		local RESTITUTION = 0.6 -- quique entre corações (1 = sem perder força)
 
-		-- 1) movimento + paredes, teto e chÃ£o
+		-- 1) movimento + paredes, teto e chão
 		for _, p in ipairs(hearts) do
 			p.vy += GRAVITY * dt
 			p.x += p.vx * dt
@@ -438,7 +438,7 @@ local function playIntro(onDone)
 			end
 		end
 
-		-- 2) colisÃ£o entre os coraÃ§Ãµes
+		-- 2) colisão entre os corações
 		for i = 1, #hearts - 1 do
 			local a = hearts[i]
 			for j = i + 1, #hearts do
@@ -457,7 +457,7 @@ local function playIntro(onDone)
 					b.x += nx * overlap
 					b.y += ny * overlap
 
-					-- troca de velocidade na direÃ§Ã£o do choque
+					-- troca de velocidade na direção do choque
 					local vn = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny
 					if vn < 0 then
 						local impulse = -(1 + RESTITUTION) * vn / 2
@@ -470,7 +470,7 @@ local function playIntro(onDone)
 			end
 		end
 
-		-- 3) mantÃ©m dentro da tela e atualiza a posiÃ§Ã£o na tela
+		-- 3) mantém dentro da tela e atualiza a posição na tela
 		for _, p in ipairs(hearts) do
 			p.x = math.clamp(p.x, p.r, W - p.r)
 			p.y = math.clamp(p.y, p.r, H - p.r)
@@ -479,11 +479,11 @@ local function playIntro(onDone)
 		end
 	end
 
-	-- 5) o beijo original volta a ficar minÃºsculo, "de onde veio"
+	-- 5) o beijo original volta a ficar minúsculo, "de onde veio"
 	tween(kissScale, 0.6, { Scale = 0.02 }, Enum.EasingStyle.Back, Enum.EasingDirection.In)
 		.Completed:Connect(function() kiss:Destroy() end)
 
-	-- 6) simula a fÃ­sica e, ao fim do tempo, some tudo
+	-- 6) simula a física e, ao fim do tempo, some tudo
 	local startTime = os.clock()
 	local fading = false
 	while true do
@@ -511,15 +511,15 @@ gui.Name = "MiniMenu"
 gui.ResetOnSpawn = false
 gui.Parent = player:WaitForChild("PlayerGui")
 
--- o botÃ£o redondo agora Ã© sÃ³ um coraÃ§Ã£o (sem fundo e sem "+")
+-- o botão redondo agora é só um coração (sem fundo e sem "+")
 local bubble = Instance.new("TextButton")
 bubble.Size = UDim2.fromOffset(48, 48)
 bubble.Position = UDim2.fromOffset(20, 200)
-bubble.Text = "â¤ï¸"
+bubble.Text = "❤️"
 bubble.Font = Enum.Font.GothamMedium
 bubble.TextScaled = true
 bubble.BackgroundTransparency = 1
-bubble.Visible = false -- sÃ³ aparece depois da intro
+bubble.Visible = false -- só aparece depois da intro
 bubble.Parent = gui
 
 local bubbleScale = Instance.new("UIScale")
@@ -527,12 +527,12 @@ bubbleScale.Scale = 0.01
 bubbleScale.Parent = bubble
 
 local PANEL_W = 176 -- 20% mais estreito (era 220)
-local PANEL_H = 240 -- altura visÃ­vel do menu (o resto rola)
+local PANEL_H = 240 -- altura visível do menu (o resto rola)
 local LIST_W = 170
-local LIST_Y = 0 -- altura da lista em relaÃ§Ã£o ao painel (0 = alinhada ao topo)
+local LIST_Y = 0 -- altura da lista em relação ao painel (0 = alinhada ao topo)
 local LIST_H = PANEL_H
 
--- cada linha continua com botÃ£o de 32 de altura (espaÃ§amento de 40)
+-- cada linha continua com botão de 32 de altura (espaçamento de 40)
 local ROW_H = 32
 local ROW_STEP = 40
 local function rowY(index)
@@ -543,7 +543,7 @@ local ROW_RE = #options + 2
 local ROW_HOP = #options + 3
 local ROW_SELECT = #options + 4
 local ROW_TP = #options + 5
-local CONTENT_H = rowY(ROW_TP) + ROW_H + 6 -- altura total do conteÃºdo rolÃ¡vel
+local CONTENT_H = rowY(ROW_TP) + ROW_H + 6 -- altura total do conteúdo rolável
 
 local panel = Instance.new("Frame")
 panel.Size = UDim2.fromOffset(PANEL_W, PANEL_H)
@@ -558,7 +558,7 @@ addStroke(panel, 2, 0.2)
 local panelScale = Instance.new("UIScale")
 panelScale.Parent = panel
 
--- Ã¡rea rolÃ¡vel do menu principal (todos os botÃµes ficam aqui dentro)
+-- área rolável do menu principal (todos os botões ficam aqui dentro)
 local content = Instance.new("ScrollingFrame")
 content.Size = UDim2.new(1, 0, 1, -12)
 content.Position = UDim2.fromOffset(0, 6)
@@ -570,7 +570,7 @@ content.ScrollingDirection = Enum.ScrollingDirection.Y
 content.CanvasSize = UDim2.fromOffset(0, CONTENT_H)
 content.Parent = panel
 
--- botÃµes liga/desliga (sÃ³ o nome; a cor mostra se estÃ¡ ligado)
+-- botões liga/desliga (só o nome; a cor mostra se está ligado)
 for i, opt in ipairs(options) do
 	local state = false
 	local row = Instance.new("TextButton")
@@ -591,7 +591,7 @@ for i, opt in ipairs(options) do
 	end)
 end
 
--- botÃµes Q / E do Float (segure para descer / subir)
+-- botões Q / E do Float (segure para descer / subir)
 local halfW = (PANEL_W - 16 - 8) / 2
 
 local function makeHoldButton(text, x, setter)
@@ -600,7 +600,7 @@ local function makeHoldButton(text, x, setter)
 	b.Position = UDim2.fromOffset(x, rowY(ROW_QE))
 	b.BackgroundColor3 = COLOR_OFF
 	styleText(b, 16)
-	b.TextScaled = true -- o texto se ajusta ao botÃ£o mais estreito
+	b.TextScaled = true -- o texto se ajusta ao botão mais estreito
 	local limit = Instance.new("UITextSizeConstraint")
 	limit.MaxTextSize = 16
 	limit.Parent = b
@@ -627,7 +627,7 @@ end
 makeHoldButton("Q (descer)", 8, function(v) floatDown = v end)
 makeHoldButton("E (subir)", 8 + halfW + 8, function(v) floatUp = v end)
 
--- botÃ£o genÃ©rico de aÃ§Ã£o (clica e executa, sem ligar/desligar)
+-- botão genérico de ação (clica e executa, sem ligar/desligar)
 local function makeActionButton(text, row, color, onClick)
 	local b = Instance.new("TextButton")
 	b.Size = UDim2.new(1, -16, 0, ROW_H)
@@ -665,7 +665,7 @@ hopBtn = makeActionButton("Server Hop", ROW_HOP, COLOR_OFF, function()
 		end)
 	end
 end)
-hopBtn.TextScaled = true -- mensagens longas se ajustam ao botÃ£o
+hopBtn.TextScaled = true -- mensagens longas se ajustam ao botão
 local hopLimit = Instance.new("UITextSizeConstraint")
 hopLimit.MaxTextSize = 16
 hopLimit.Parent = hopBtn
@@ -691,19 +691,19 @@ tpBtn.Position = UDim2.fromOffset(8, rowY(ROW_TP))
 tpBtn.BackgroundColor3 = COLOR_TP
 styleText(tpBtn, 16)
 tpBtn.TextTruncate = Enum.TextTruncate.AtEnd
-tpBtn.Text = "TP atÃ© o jogador"
+tpBtn.Text = "TP até o jogador"
 tpBtn.Parent = content
 Instance.new("UICorner", tpBtn).CornerRadius = UDim.new(0, 10)
 addStroke(tpBtn, 1.5, 0.5)
 addPress(tpBtn)
 
--- texto do botÃ£o de teleporte (muda para alguns usuÃ¡rios especÃ­ficos)
+-- texto do botão de teleporte (muda para alguns usuários específicos)
 local function updateTpText()
-	local name = selectedPlayer and string.lower(selectedPlayer.Name) -- nome de usuÃ¡rio, nÃ£o o display name
+	local name = selectedPlayer and string.lower(selectedPlayer.Name) -- nome de usuário, não o display name
 	if name == "7pjbxy8sqf" or name == "yazzy_wm" then
-		tpBtn.Text = "ir para mozÃ£o"
+		tpBtn.Text = "ir para mozão"
 	else
-		tpBtn.Text = "TP atÃ© o jogador"
+		tpBtn.Text = "TP até o jogador"
 	end
 end
 
@@ -781,7 +781,7 @@ setList = function(open)
 	listOpen = open
 	if open then
 		refreshList()
-		-- abre Ã  direita; se nÃ£o couber na tela, abre Ã  esquerda
+		-- abre à direita; se não couber na tela, abre à esquerda
 		local screenW = gui.AbsoluteSize.X
 		if bubble.AbsolutePosition.X + PANEL_W + 6 + LIST_W > screenW then
 			list.Position = UDim2.fromOffset(-LIST_W - 6, LIST_Y)
@@ -803,7 +803,7 @@ selectBtn.Activated:Connect(function()
 	setList(not listOpen)
 end)
 
--- a lista atualiza sozinha quando alguÃ©m entra ou sai do servidor
+-- a lista atualiza sozinha quando alguém entra ou sai do servidor
 Players.PlayerAdded:Connect(refreshList)
 Players.PlayerRemoving:Connect(function() task.defer(refreshList) end)
 
@@ -818,7 +818,7 @@ end)
 
 refreshList()
 
--- ===== ABRIR / FECHAR O PAINEL (com animaÃ§Ã£o) =====
+-- ===== ABRIR / FECHAR O PAINEL (com animação) =====
 local panelOpen = false
 local function setPanel(open)
 	panelOpen = open
@@ -835,7 +835,7 @@ local function setPanel(open)
 	end
 end
 
--- ===== ARRASTAR O CORAÃ‡ÃƒO / CLICAR ABRE O MENU =====
+-- ===== ARRASTAR O CORAÇÃO / CLICAR ABRE O MENU =====
 local dragging, startPos, startInput, moved
 bubble.InputBegan:Connect(function(input)
 	if isPress(input) then
@@ -860,7 +860,7 @@ UIS.InputEnded:Connect(function(input)
 	end
 end)
 
--- ===== BOTÃƒO INICIAR (coraÃ§Ã£o com a frase) =====
+-- ===== BOTÃO INICIAR (coração com a frase) =====
 local function showStartButton()
 	local startGui = Instance.new("ScreenGui")
 	startGui.Name = "StartGui"
@@ -881,16 +881,16 @@ local function showStartButton()
 	sc.Scale = 0.02
 	sc.Parent = btn
 
-	-- o coraÃ§Ã£o
+	-- o coração
 	local heart = Instance.new("TextLabel")
 	heart.Size = UDim2.fromScale(1, 1)
 	heart.BackgroundTransparency = 1
-	heart.Text = "â¤ï¸"
+	heart.Text = "❤️"
 	heart.Font = Enum.Font.GothamMedium
 	heart.TextSize = 100
 	heart.Parent = btn
 
-	-- a frase por cima do coraÃ§Ã£o (texto separado, por isso aceita outra fonte)
+	-- a frase por cima do coração (texto separado, por isso aceita outra fonte)
 	local phrase = Instance.new("TextLabel")
 	phrase.Size = UDim2.fromScale(0.7, 0.4)
 	phrase.AnchorPoint = Vector2.new(0.5, 0.5)
@@ -904,7 +904,7 @@ local function showStartButton()
 	phrase.TextStrokeTransparency = 0.4
 	phrase.Parent = btn
 
-	-- aparece com um pop e fica "batendo" como um coraÃ§Ã£o
+	-- aparece com um pop e fica "batendo" como um coração
 	tween(sc, 0.5, { Scale = 1 }, Enum.EasingStyle.Back).Completed:Wait()
 	local pulse = TweenService:Create(
 		sc,
@@ -917,15 +917,15 @@ local function showStartButton()
 	btn.Activated:Wait()
 	pulse:Cancel()
 
-	-- pop: cresce um pouco, fica minÃºsculo e some
+	-- pop: cresce um pouco, fica minúsculo e some
 	tween(sc, 0.15, { Scale = 1.3 }).Completed:Wait()
 	tween(sc, 0.35, { Scale = 0.02 }, Enum.EasingStyle.Back, Enum.EasingDirection.In).Completed:Wait()
 	startGui:Destroy()
 end
 
--- ===== INICIA: BOTÃƒO DO CORAÃ‡ÃƒO, DEPOIS A INTRO DO BEIJO, DEPOIS O CORAÃ‡ÃƒO DO MENU =====
+-- ===== INICIA: BOTÃO DO CORAÇÃO, DEPOIS A INTRO DO BEIJO, DEPOIS O CORAÇÃO DO MENU =====
 task.spawn(function()
-	showStartButton() -- espera o clique no coraÃ§Ã£o
+	showStartButton() -- espera o clique no coração
 	playIntro(function()
 		bubble.Visible = true
 		bubbleScale.Scale = 0.01
