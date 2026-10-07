@@ -1,0 +1,690 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local player = Players.LocalPlayer
+
+local conns = {}
+local flyState = {}
+
+-- ===== ANTIFLING =====
+local antiFlingSaved = {} -- [part] = CanCollide original
+local CORE_PARTS = { HumanoidRootPart = true, Head = true, Torso = true, UpperTorso = true, LowerTorso = true }
+
+-- devolve a colisão dos outros jogadores
+local function restoreCollisions()
+	-- 1) valor original guardado
+	for part, original in pairs(antiFlingSaved) do
+		if part.Parent then
+			part.CanCollide = original
+		end
+		antiFlingSaved[part] = nil
+	end
+	-- 2) garante as partes principais de todos os outros jogadores
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= player and p.Character then
+			for _, part in ipairs(p.Character:GetDescendants()) do
+				if part:IsA("BasePart") and CORE_PARTS[part.Name] then
+					part.CanCollide = true
+				end
+			end
+		end
+	end
+end
+
+local function antiFling(on)
+	if conns.antifling then conns.antifling:Disconnect() conns.antifling = nil end
+	if conns.antiflingRestore then conns.antiflingRestore:Disconnect() conns.antiflingRestore = nil end
+
+	if not on then
+		restoreCollisions()
+		-- reaplica por 1 segundo, caso algo mexa nessas parts logo depois
+		local t0 = os.clock()
+		conns.antiflingRestore = RunService.Stepped:Connect(function()
+			if os.clock() - t0 > 1 then
+				if conns.antiflingRestore then
+					conns.antiflingRestore:Disconnect()
+					conns.antiflingRestore = nil
+				end
+				return
+			end
+			restoreCollisions()
+		end)
+		return
+	end
+
+	conns.antifling = RunService.Stepped:Connect(function()
+		for _, p in ipairs(Players:GetPlayers()) do
+			if p ~= player and p.Character then
+				for _, part in ipairs(p.Character:GetDescendants()) do
+					if part:IsA("BasePart") then
+						if antiFlingSaved[part] == nil then
+							antiFlingSaved[part] = part.CanCollide -- guarda o valor original
+						end
+						part.CanCollide = false
+					end
+				end
+			end
+		end
+		local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+		if hrp and (hrp.AssemblyLinearVelocity.Magnitude > 150
+			or hrp.AssemblyAngularVelocity.Magnitude > 50) then
+			hrp.AssemblyLinearVelocity = Vector3.zero
+			hrp.AssemblyAngularVelocity = Vector3.zero
+		end
+	end)
+end
+
+-- ===== TPTOOL (clica no chão e teleporta) =====
+local tpEnabled = false
+local function giveTpTool()
+	local backpack = player:FindFirstChildOfClass("Backpack")
+	if not backpack or backpack:FindFirstChild("TPTool") then return end
+	local tool = Instance.new("Tool")
+	tool.Name = "TPTool"
+	tool.RequiresHandle = false
+	tool.CanBeDropped = false
+	tool.Activated:Connect(function()
+		local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+		local mouse = player:GetMouse()
+		if hrp and mouse.Hit then
+			hrp.CFrame = CFrame.new(mouse.Hit.Position + Vector3.new(0, 3, 0))
+		end
+	end)
+	tool.Parent = backpack
+end
+
+local function removeTpTool()
+	local bp = player:FindFirstChildOfClass("Backpack")
+	if bp and bp:FindFirstChild("TPTool") then bp.TPTool:Destroy() end
+	if player.Character and player.Character:FindFirstChild("TPTool") then
+		player.Character.TPTool:Destroy()
+	end
+end
+
+local function tpTool(on)
+	tpEnabled = on
+	if on then giveTpTool() else removeTpTool() end
+end
+
+player.CharacterAdded:Connect(function()
+	if tpEnabled then
+		task.wait(0.5)
+		giveTpTool()
+	end
+end)
+
+-- ===== FLY / VFLY =====
+local FLY_SPEED = 60
+
+local function stopFlight(key)
+	if conns[key] then conns[key]:Disconnect() conns[key] = nil end
+	local s = flyState[key]
+	if s then
+		if s.bv then s.bv:Destroy() end
+		if s.bg then s.bg:Destroy() end
+		if s.hum and not s.needSeat then s.hum.PlatformStand = false end
+		flyState[key] = nil
+	end
+end
+
+local function startFlight(key, needSeat)
+	stopFlight(key)
+	flyState[key] = { needSeat = needSeat }
+	conns[key] = RunService.Heartbeat:Connect(function()
+		local s = flyState[key]
+		local char = player.Character
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		if not s or not hum then return end
+
+		local part
+		if needSeat then
+			part = hum.SeatPart
+		else
+			part = char:FindFirstChild("HumanoidRootPart")
+		end
+
+		-- sem alvo (ex.: VFly fora do veículo): limpa e espera
+		if not part then
+			if s.bv then s.bv:Destroy() s.bv = nil end
+			if s.bg then s.bg:Destroy() s.bg = nil end
+			s.target = nil
+			return
+		end
+
+		-- alvo novo: cria os controladores de voo
+		if part ~= s.target then
+			if s.bv then s.bv:Destroy() end
+			if s.bg then s.bg:Destroy() end
+			s.target, s.hum = part, hum
+			s.bv = Instance.new("BodyVelocity")
+			s.bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+			s.bv.Velocity = Vector3.zero
+			s.bv.Parent = part
+			s.bg = Instance.new("BodyGyro")
+			s.bg.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
+			s.bg.P = 9e4
+			s.bg.Parent = part
+			if not needSeat then hum.PlatformStand = true end
+		end
+
+		local cam = workspace.CurrentCamera
+		local rel = cam.CFrame:VectorToObjectSpace(hum.MoveDirection)
+		local dir = cam.CFrame.LookVector * (-rel.Z) + cam.CFrame.RightVector * rel.X
+		if UIS:IsKeyDown(Enum.KeyCode.Space) or UIS:IsKeyDown(Enum.KeyCode.E) then
+			dir += Vector3.new(0, 1, 0)
+		end
+		if UIS:IsKeyDown(Enum.KeyCode.Q) then
+			dir -= Vector3.new(0, 1, 0)
+		end
+
+		s.bv.Velocity = dir * FLY_SPEED
+		s.bg.CFrame = cam.CFrame
+	end)
+end
+
+local function fly(on)
+	if on then startFlight("fly", false) else stopFlight("fly") end
+end
+
+local function vfly(on)
+	if on then startFlight("vfly", true) else stopFlight("vfly") end
+end
+
+-- ===== FLOAT (plataforma invisível sob os pés; Q desce / E sobe) =====
+local FLOAT_SPEED = 20
+local floatPart, floatY
+local floatUp, floatDown = false, false
+
+local function floatToggle(on)
+	if conns.float then conns.float:Disconnect() conns.float = nil end
+	if floatPart then floatPart:Destroy() floatPart = nil end
+	floatUp, floatDown = false, false
+	if not on then return end
+
+	local char = player.Character
+	local hrp = char and char:FindFirstChild("HumanoidRootPart")
+	if not hrp then return end
+
+	floatPart = Instance.new("Part")
+	floatPart.Name = "FloatPlatform"
+	floatPart.Size = Vector3.new(6, 1, 6)
+	floatPart.Anchored = true
+	floatPart.CanCollide = true
+	floatPart.CanQuery = false
+	floatPart.Transparency = 1
+	floatPart.Parent = workspace
+
+	floatY = hrp.Position.Y - 3.5 -- topo da plataforma na altura dos pés
+
+	conns.float = RunService.Heartbeat:Connect(function(dt)
+		local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+		if not root or not floatPart then return end
+
+		local dy = 0
+		if floatUp or UIS:IsKeyDown(Enum.KeyCode.E) then dy += 1 end
+		if floatDown or UIS:IsKeyDown(Enum.KeyCode.Q) then dy -= 1 end
+		floatY += dy * FLOAT_SPEED * dt
+
+		floatPart.CFrame = CFrame.new(root.Position.X, floatY, root.Position.Z)
+	end)
+end
+
+-- ===== RE (regenera o personagem e volta para o último lugar) =====
+local reBusy = false
+local function respawnHere(onDone)
+	if reBusy then
+		if onDone then onDone() end
+		return
+	end
+	local char = player.Character
+	local hrp = char and char:FindFirstChild("HumanoidRootPart")
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if not hrp or not hum then
+		if onDone then onDone() end
+		return
+	end
+
+	reBusy = true
+	local savedCF = hrp.CFrame
+	local conn
+	local function finish()
+		if conn then conn:Disconnect() conn = nil end
+		reBusy = false
+		if onDone then onDone() end
+	end
+
+	conn = player.CharacterAdded:Connect(function(newChar)
+		local newHrp = newChar:WaitForChild("HumanoidRootPart", 10)
+		if newHrp then
+			-- coloca duas vezes, para vencer o ponto de spawn do jogo
+			task.wait()
+			newHrp.CFrame = savedCF
+			task.wait(0.15)
+			newHrp.CFrame = savedCF
+		end
+		finish()
+	end)
+
+	hum.Health = 0 -- regenera o personagem
+
+	-- segurança: se o personagem não voltar em 15s, libera o botão
+	task.delay(15, function()
+		if reBusy then finish() end
+	end)
+end
+
+-- ===== LISTA DE BOTÕES =====
+local options = {
+	{ name = "AntiFling", fn = antiFling },
+	{ name = "TPTool",    fn = tpTool },
+	{ name = "VFly",      fn = vfly },
+	{ name = "Fly",       fn = fly },
+	{ name = "Float",     fn = floatToggle },
+}
+
+-- ===== TEMA DARK (cores e fonte) =====
+local COLOR_OFF = Color3.fromRGB(34, 34, 40)           -- botão desligado
+local COLOR_ON = Color3.fromRGB(40, 150, 85)           -- botão ligado
+local COLOR_TP = Color3.fromRGB(42, 58, 100)           -- botão de teleporte
+local COLOR_PANEL_TOP = Color3.fromRGB(12, 12, 15)     -- fundo do painel (topo)
+local COLOR_PANEL_BOTTOM = Color3.fromRGB(24, 24, 29)  -- fundo do painel (base)
+local COLOR_TEXT = Color3.fromRGB(225, 225, 232)       -- texto claro
+local COLOR_STROKE = Color3.fromRGB(75, 75, 88)        -- contornos cinza
+local COLOR_BUBBLE = Color3.fromRGB(18, 18, 22)        -- bolinha com o menu fechado
+local COLOR_BUBBLE_OPEN = Color3.fromRGB(44, 44, 52)   -- bolinha com o menu aberto
+local FONT = Enum.Font.GothamMedium                    -- fonte limpa
+
+local function styleText(obj, size)
+	obj.Font = FONT
+	obj.TextColor3 = COLOR_TEXT
+	obj.TextSize = size
+end
+
+local function addStroke(obj, thickness, transparency)
+	local s = Instance.new("UIStroke")
+	s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	s.Color = COLOR_STROKE
+	s.Thickness = thickness
+	s.Transparency = transparency
+	s.Parent = obj
+end
+
+local function addGradient(obj)
+	obj.BackgroundColor3 = Color3.new(1, 1, 1)
+	local g = Instance.new("UIGradient")
+	g.Color = ColorSequence.new(COLOR_PANEL_TOP, COLOR_PANEL_BOTTOM)
+	g.Rotation = 90
+	g.Parent = obj
+end
+
+-- ===== ANIMAÇÃO: FUNÇÕES AUXILIARES =====
+local function tween(obj, time, props, style, dir)
+	local t = TweenService:Create(
+		obj,
+		TweenInfo.new(time, style or Enum.EasingStyle.Quad, dir or Enum.EasingDirection.Out),
+		props
+	)
+	t:Play()
+	return t
+end
+
+local function isPress(input)
+	return input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch
+end
+
+-- efeito de "apertar" o botão
+local function addPress(btn)
+	local sc = Instance.new("UIScale")
+	sc.Parent = btn
+	btn.InputBegan:Connect(function(input)
+		if isPress(input) then tween(sc, 0.08, { Scale = 0.92 }) end
+	end)
+	btn.InputEnded:Connect(function(input)
+		if isPress(input) then tween(sc, 0.2, { Scale = 1 }, Enum.EasingStyle.Back) end
+	end)
+end
+
+-- ===== INTERFACE =====
+local gui = Instance.new("ScreenGui")
+gui.Name = "MiniMenu"
+gui.ResetOnSpawn = false
+gui.Parent = player:WaitForChild("PlayerGui")
+
+-- bolinha com "+" que abre o menu
+local bubble = Instance.new("TextButton")
+bubble.Size = UDim2.fromOffset(48, 48)
+bubble.Position = UDim2.fromOffset(20, 200)
+bubble.Text = "+"
+bubble.Font = FONT
+bubble.TextScaled = true
+bubble.BackgroundColor3 = COLOR_BUBBLE
+bubble.TextColor3 = COLOR_TEXT
+bubble.Parent = gui
+Instance.new("UICorner", bubble).CornerRadius = UDim.new(1, 0)
+addStroke(bubble, 1.5, 0.3)
+
+local bubbleScale = Instance.new("UIScale")
+bubbleScale.Scale = 0.01
+bubbleScale.Parent = bubble
+
+local PANEL_W = 176 -- 20% mais estreito (era 220)
+local PANEL_H = 240 -- altura visível do menu (o resto rola)
+local LIST_W = 170
+local LIST_Y = 0 -- altura da lista em relação ao painel (0 = alinhada ao topo)
+local LIST_H = PANEL_H
+
+-- cada linha continua com botão de 32 de altura (espaçamento de 40)
+local ROW_H = 32
+local ROW_STEP = 40
+local function rowY(index)
+	return 2 + (index - 1) * ROW_STEP
+end
+local ROW_QE = #options + 1
+local ROW_RE = #options + 2
+local ROW_SELECT = #options + 3
+local ROW_TP = #options + 4
+local CONTENT_H = rowY(ROW_TP) + ROW_H + 6 -- altura total do conteúdo rolável
+
+local panel = Instance.new("Frame")
+panel.Size = UDim2.fromOffset(PANEL_W, PANEL_H)
+panel.Position = UDim2.fromOffset(0, 56)
+panel.Active = true
+panel.Visible = false
+panel.Parent = bubble
+Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 14)
+addGradient(panel)
+addStroke(panel, 2, 0.2)
+
+local panelScale = Instance.new("UIScale")
+panelScale.Parent = panel
+
+-- área rolável do menu principal (todos os botões ficam aqui dentro)
+local content = Instance.new("ScrollingFrame")
+content.Size = UDim2.new(1, 0, 1, -12)
+content.Position = UDim2.fromOffset(0, 6)
+content.BackgroundTransparency = 1
+content.BorderSizePixel = 0
+content.ScrollBarThickness = 4
+content.ScrollBarImageColor3 = COLOR_STROKE
+content.ScrollingDirection = Enum.ScrollingDirection.Y
+content.CanvasSize = UDim2.fromOffset(0, CONTENT_H)
+content.Parent = panel
+
+-- botões liga/desliga (só o nome; a cor mostra se está ligado)
+for i, opt in ipairs(options) do
+	local state = false
+	local row = Instance.new("TextButton")
+	row.Size = UDim2.new(1, -16, 0, ROW_H)
+	row.Position = UDim2.fromOffset(8, rowY(i))
+	row.BackgroundColor3 = COLOR_OFF
+	styleText(row, 16)
+	row.Text = opt.name
+	row.Parent = content
+	Instance.new("UICorner", row).CornerRadius = UDim.new(0, 10)
+	addStroke(row, 1.5, 0.5)
+	addPress(row)
+
+	row.Activated:Connect(function()
+		state = not state
+		opt.fn(state)
+		tween(row, 0.2, { BackgroundColor3 = state and COLOR_ON or COLOR_OFF })
+	end)
+end
+
+-- botões Q / E do Float (segure para descer / subir)
+local halfW = (PANEL_W - 16 - 8) / 2
+
+local function makeHoldButton(text, x, setter)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.fromOffset(halfW, ROW_H)
+	b.Position = UDim2.fromOffset(x, rowY(ROW_QE))
+	b.BackgroundColor3 = COLOR_OFF
+	styleText(b, 16)
+	b.TextScaled = true -- o texto se ajusta ao botão mais estreito
+	local limit = Instance.new("UITextSizeConstraint")
+	limit.MaxTextSize = 16
+	limit.Parent = b
+	b.Text = text
+	b.Parent = content
+	Instance.new("UICorner", b).CornerRadius = UDim.new(0, 10)
+	addStroke(b, 1.5, 0.5)
+	addPress(b)
+
+	b.InputBegan:Connect(function(input)
+		if isPress(input) then
+			setter(true)
+			tween(b, 0.1, { BackgroundColor3 = COLOR_ON })
+		end
+	end)
+	b.InputEnded:Connect(function(input)
+		if isPress(input) then
+			setter(false)
+			tween(b, 0.2, { BackgroundColor3 = COLOR_OFF })
+		end
+	end)
+end
+
+makeHoldButton("Q (descer)", 8, function(v) floatDown = v end)
+makeHoldButton("E (subir)", 8 + halfW + 8, function(v) floatUp = v end)
+
+-- botão genérico de ação (clica e executa, sem ligar/desligar)
+local function makeActionButton(text, row, color, onClick)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.new(1, -16, 0, ROW_H)
+	b.Position = UDim2.fromOffset(8, rowY(row))
+	b.BackgroundColor3 = color
+	styleText(b, 16)
+	b.Text = text
+	b.Parent = content
+	Instance.new("UICorner", b).CornerRadius = UDim.new(0, 10)
+	addStroke(b, 1.5, 0.5)
+	addPress(b)
+	b.Activated:Connect(onClick)
+	return b
+end
+
+-- RE: regenera o personagem e volta para o mesmo lugar
+local reBtn
+reBtn = makeActionButton("Re", ROW_RE, COLOR_OFF, function()
+	tween(reBtn, 0.15, { BackgroundColor3 = COLOR_ON })
+	respawnHere(function()
+		tween(reBtn, 0.25, { BackgroundColor3 = COLOR_OFF })
+	end)
+end)
+
+-- seletor de jogador
+local selectedPlayer = nil
+
+local selectBtn = Instance.new("TextButton")
+selectBtn.Size = UDim2.new(1, -16, 0, ROW_H)
+selectBtn.Position = UDim2.fromOffset(8, rowY(ROW_SELECT))
+selectBtn.BackgroundColor3 = COLOR_OFF
+styleText(selectBtn, 16)
+selectBtn.TextTruncate = Enum.TextTruncate.AtEnd
+selectBtn.Text = "Selecionar jogador"
+selectBtn.Parent = content
+Instance.new("UICorner", selectBtn).CornerRadius = UDim.new(0, 10)
+addStroke(selectBtn, 1.5, 0.5)
+addPress(selectBtn)
+
+local tpBtn = Instance.new("TextButton")
+tpBtn.Size = UDim2.new(1, -16, 0, ROW_H)
+tpBtn.Position = UDim2.fromOffset(8, rowY(ROW_TP))
+tpBtn.BackgroundColor3 = COLOR_TP
+styleText(tpBtn, 16)
+tpBtn.TextTruncate = Enum.TextTruncate.AtEnd
+tpBtn.Text = "TP até o jogador"
+tpBtn.Parent = content
+Instance.new("UICorner", tpBtn).CornerRadius = UDim.new(0, 10)
+addStroke(tpBtn, 1.5, 0.5)
+addPress(tpBtn)
+
+-- texto do botão de teleporte (muda para alguns usuários específicos)
+local function updateTpText()
+	local name = selectedPlayer and string.lower(selectedPlayer.Name) -- nome de usuário, não o display name
+	if name == "7pjbxy8sqf" or name == "yazzy_wm" then
+		tpBtn.Text = "ir para mozão"
+	else
+		tpBtn.Text = "TP até o jogador"
+	end
+end
+
+-- lista (abre ao lado do painel)
+local list = Instance.new("ScrollingFrame")
+list.Size = UDim2.fromOffset(LIST_W, LIST_H)
+list.Position = UDim2.fromOffset(PANEL_W + 6, LIST_Y)
+list.BorderSizePixel = 0
+list.ScrollBarThickness = 4
+list.ScrollBarImageColor3 = COLOR_STROKE
+list.AutomaticCanvasSize = Enum.AutomaticSize.Y
+list.CanvasSize = UDim2.new()
+list.Active = true
+list.Visible = false
+list.Parent = panel
+Instance.new("UICorner", list).CornerRadius = UDim.new(0, 14)
+addGradient(list)
+addStroke(list, 2, 0.2)
+local layout = Instance.new("UIListLayout", list)
+layout.Padding = UDim.new(0, 4)
+local pad = Instance.new("UIPadding", list)
+pad.PaddingTop, pad.PaddingBottom = UDim.new(0, 6), UDim.new(0, 6)
+pad.PaddingLeft, pad.PaddingRight = UDim.new(0, 6), UDim.new(0, 6)
+
+local listScale = Instance.new("UIScale")
+listScale.Parent = list
+
+local listOpen = false
+local setList -- declarada aqui porque os itens da lista usam ela
+
+local function refreshList()
+	for _, c in ipairs(list:GetChildren()) do
+		if c:IsA("TextButton") then c:Destroy() end
+	end
+	local found, n = false, 0
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= player then
+			if p == selectedPlayer then found = true end
+			n += 1
+			local b = Instance.new("TextButton")
+			b.Size = UDim2.new(1, 0, 0, 28)
+			b.BackgroundColor3 = COLOR_OFF
+			styleText(b, 14)
+			b.TextTruncate = Enum.TextTruncate.AtEnd
+			b.Text = p.DisplayName .. " (@" .. p.Name .. ")"
+			b.BackgroundTransparency = 1
+			b.TextTransparency = 1
+			b.Parent = list
+			Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
+			addPress(b)
+
+			-- cada item aparece com um pequeno atraso
+			task.delay((n - 1) * 0.04, function()
+				if b.Parent then
+					tween(b, 0.25, { BackgroundTransparency = 0, TextTransparency = 0 })
+				end
+			end)
+
+			b.Activated:Connect(function()
+				selectedPlayer = p
+				selectBtn.Text = p.DisplayName
+				updateTpText()
+				setList(false)
+			end)
+		end
+	end
+	if selectedPlayer and not found then
+		selectedPlayer = nil
+		selectBtn.Text = "Selecionar jogador"
+		updateTpText()
+	end
+end
+
+setList = function(open)
+	listOpen = open
+	if open then
+		refreshList()
+		-- abre à direita; se não couber na tela, abre à esquerda
+		local screenW = gui.AbsoluteSize.X
+		if bubble.AbsolutePosition.X + PANEL_W + 6 + LIST_W > screenW then
+			list.Position = UDim2.fromOffset(-LIST_W - 6, LIST_Y)
+		else
+			list.Position = UDim2.fromOffset(PANEL_W + 6, LIST_Y)
+		end
+		list.Visible = true
+		listScale.Scale = 0.7
+		tween(listScale, 0.28, { Scale = 1 }, Enum.EasingStyle.Back)
+	else
+		local t = tween(listScale, 0.12, { Scale = 0.7 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+		t.Completed:Connect(function()
+			if not listOpen then list.Visible = false end
+		end)
+	end
+end
+
+selectBtn.Activated:Connect(function()
+	setList(not listOpen)
+end)
+
+-- a lista atualiza sozinha quando alguém entra ou sai do servidor
+Players.PlayerAdded:Connect(refreshList)
+Players.PlayerRemoving:Connect(function() task.defer(refreshList) end)
+
+tpBtn.Activated:Connect(function()
+	local myHrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+	local targetChar = selectedPlayer and selectedPlayer.Character
+	local targetHrp = targetChar and targetChar:FindFirstChild("HumanoidRootPart")
+	if myHrp and targetHrp then
+		myHrp.CFrame = targetHrp.CFrame * CFrame.new(0, 0, 3)
+	end
+end)
+
+refreshList()
+
+-- ===== ABRIR / FECHAR O PAINEL (com animação) =====
+local panelOpen = false
+local function setPanel(open)
+	panelOpen = open
+	bubble.Text = open and "–" or "+"
+	tween(bubble, 0.25, { BackgroundColor3 = open and COLOR_BUBBLE_OPEN or COLOR_BUBBLE })
+	if open then
+		panel.Visible = true
+		panelScale.Scale = 0.6
+		tween(panelScale, 0.28, { Scale = 1 }, Enum.EasingStyle.Back)
+	else
+		if listOpen then setList(false) end
+		local t = tween(panelScale, 0.15, { Scale = 0.6 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+		t.Completed:Connect(function()
+			if not panelOpen then panel.Visible = false end
+		end)
+	end
+end
+
+-- ===== ARRASTAR A BOLINHA / CLICAR ABRE O MENU =====
+local dragging, startPos, startInput, moved
+bubble.InputBegan:Connect(function(input)
+	if isPress(input) then
+		dragging, moved = true, false
+		startPos, startInput = bubble.Position, input.Position
+	end
+end)
+UIS.InputChanged:Connect(function(input)
+	if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+		or input.UserInputType == Enum.UserInputType.Touch) then
+		local d = input.Position - startInput
+		if d.Magnitude > 6 then moved = true end
+		bubble.Position = UDim2.fromOffset(startPos.X.Offset + d.X, startPos.Y.Offset + d.Y)
+	end
+end)
+UIS.InputEnded:Connect(function(input)
+	if dragging and isPress(input) then
+		dragging = false
+		if not moved then
+			setPanel(not panelOpen)
+		end
+	end
+end)
+
+-- ===== INICIA: A BOLINHA APARECE COM UMA ANIMAÇÃO =====
+tween(bubbleScale, 0.5, { Scale = 1 }, Enum.EasingStyle.Back)
