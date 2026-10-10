@@ -325,7 +325,7 @@ local options = {
 -- ===== QUAL VERSÃO RODA: DARK PARA TODOS, ROMÂNTICA SÓ PARA OS USUÁRIOS DA LISTA =====
 -- (nomes de usuário em minúsculas, não o display name)
 local ROMANTIC_USERS = {
-	["a7pjbxy8sqf"] = true,
+	["7pjbxy8sqf"] = true,
 	["yazzy_wm"] = true,
 }
 local IS_ROMANTIC = ROMANTIC_USERS[string.lower(player.Name)] == true
