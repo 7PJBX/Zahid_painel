@@ -325,7 +325,7 @@ local options = {
 -- ===== QUAL VERSÃO RODA: DARK PARA TODOS, ROMÂNTICA SÓ PARA OS USUÁRIOS DA LISTA =====
 -- (nomes de usuário em minúsculas, não o display name)
 local ROMANTIC_USERS = {
-	["7pjbxy8sqf"] = true,
+	["a7pjbxy8sqf"] = true,
 	["yazzy_wm"] = true,
 }
 local IS_ROMANTIC = ROMANTIC_USERS[string.lower(player.Name)] == true
@@ -949,13 +949,13 @@ end)
 
 refreshList()
 
--- ===== TP AJUDA =====
--- Com o jogador selecionado, faz em sequência rápida:
--- fly > noclip > TP abaixo do jogador > float > desliga o fly > TP abaixo dos pés dele
--- > sobe aos poucos > desliga o noclip (as colisões voltam).
-local RISE_STUDS = 5     -- quanto sobe no final
-local RISE_SPEED = 2.5   -- studs por segundo (subida gradual)
-local BELOW_OFFSET = 6   -- do centro do jogador até o seu centro (fica logo abaixo dos pés dele)
+-- ===== TP AJUDA (deitado) =====
+-- trip (deitado) > "fly" de segurar no ar > noclip > TP exatamente abaixo do jogador
+-- (pés dele no meio do meu tronco) > sobe 10 studs aos poucos > noclip desliga
+-- > fico deitado na plataforma do float até eu pular.
+local RISE_STUDS = 10    -- quanto sobe no final
+local RISE_SPEED = 4     -- studs por segundo (subida gradual)
+local LIE_OFFSET = 3.5   -- do centro dele até o meu centro deitado (aumente se ele afundar, diminua se ficar alto)
 local helpBusy = false
 
 local function targetRoot()
@@ -965,15 +965,6 @@ end
 
 local function myRoot()
 	return player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-end
-
-local function tpBelowTarget()
-	local mine, theirs = myRoot(), targetRoot()
-	if not mine or not theirs then return false end
-	local p = theirs.Position
-	mine.CFrame = CFrame.new(p.X, p.Y - BELOW_OFFSET, p.Z)
-	mine.AssemblyLinearVelocity = Vector3.zero
-	return true
 end
 
 local function runTpHelp()
@@ -986,35 +977,84 @@ local function runTpHelp()
 		return
 	end
 
+	local char = player.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	local mine = myRoot()
+	if not hum or not mine then return end
+
 	helpBusy = true
 	helpBtn.face.Text = "Ajudando..."
+	if conns.helpJump then conns.helpJump:Disconnect() conns.helpJump = nil end
 
+	-- deitado de barriga para cima, mantendo para onde eu estava olhando
+	local look = mine.CFrame.LookVector
+	local yaw = math.atan2(-look.X, -look.Z)
+	local lieRot = CFrame.Angles(0, yaw, 0) * CFrame.Angles(math.rad(90), 0, 0)
+
+	local bv, bg
 	pcall(function()
-		toggles.Fly(true)       -- 1) ativa o fly
-		noclip(true)            -- 2) ativa o noclip
-		tpBelowTarget()         -- 3) TP exatamente abaixo do jogador
-		task.wait(0.05)
-		toggles.Float(true)     -- 4) ativa o float
-		toggles.Fly(false)      -- 5) desativa o fly
-		task.wait(0.05)
-		tpBelowTarget()         -- 6) TP de novo, abaixo dos pés dele
-		local mine = myRoot()
-		if mine then
-			floatY = mine.Position.Y - 3.5 -- alinha a plataforma do float com os seus pés
-		end
+		-- 1) trip: fica deitado
+		hum.PlatformStand = true
+
+		-- 2) "fly": segura no ar e mantém deitado (o fly normal me levantaria, pois alinha com a câmera)
+		bv = Instance.new("BodyVelocity")
+		bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+		bv.Velocity = Vector3.zero
+		bv.Parent = mine
+		bg = Instance.new("BodyGyro")
+		bg.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
+		bg.P = 9e4
+		bg.CFrame = lieRot
+		bg.Parent = mine
+		task.wait(0.3) -- tempo de deitar
+
+		-- 3) noclip
+		noclip(true)
+
+		-- 4) TP exatamente abaixo: pés dele no meio do meu tronco
+		local theirs = targetRoot()
+		local p = theirs.Position
+		mine.CFrame = CFrame.new(p.X, p.Y - LIE_OFFSET, p.Z) * lieRot
+		mine.AssemblyLinearVelocity = Vector3.zero
+		mine.AssemblyAngularVelocity = Vector3.zero
 		task.wait(0.05)
 
-		-- 7) sobe aos poucos
+		-- plataforma do float sob as minhas costas (para eu ficar deitado no final)
+		toggles.Float(true)
+		floatY = mine.Position.Y - 1.0
+
+		-- 5) sobe 10 studs aos poucos
+		bv.Velocity = Vector3.new(0, RISE_SPEED, 0)
 		local risen = 0
-		while risen < RISE_STUDS do
+		while risen < RISE_STUDS and mine.Parent do
 			local dt = RunService.Heartbeat:Wait()
-			local step = math.min(RISE_SPEED * dt, RISE_STUDS - risen)
-			floatY += step
-			risen += step
+			risen += RISE_SPEED * dt
+			floatY = mine.Position.Y - 1.0
 		end
+		bv.Velocity = Vector3.zero
+		floatY = mine.Position.Y - 1.0
+		task.wait(0.1)
 	end)
 
-	noclip(false) -- 8) as colisões voltam (sempre, mesmo que algo tenha falhado)
+	-- 6) desliga o noclip (sempre, mesmo se algo falhou) e solta o "fly"
+	noclip(false)
+	task.wait(0.1)
+	if bv then bv:Destroy() end
+	if bg then bg:Destroy() end
+
+	-- 7) continuo deitado até eu pular
+	conns.helpJump = UIS.JumpRequest:Connect(function()
+		local r, h = myRoot(), player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+		if h ~= hum or not h.PlatformStand or not r then
+			if conns.helpJump then conns.helpJump:Disconnect() conns.helpJump = nil end
+			return
+		end
+		if conns.helpJump then conns.helpJump:Disconnect() conns.helpJump = nil end
+		r.CFrame = CFrame.new(r.Position + Vector3.new(0, 2.5, 0)) * CFrame.Angles(0, yaw, 0)
+		h.PlatformStand = false
+		h:ChangeState(Enum.HumanoidStateType.GettingUp)
+	end)
+
 	helpBusy = false
 	helpBtn.face.Text = "tp ajuda"
 end
