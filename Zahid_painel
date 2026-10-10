@@ -230,51 +230,43 @@ local function floatToggle(on)
 	end)
 end
 
--- ===== ANTI-EMPURRÃO (se algo te empurrar, você volta ao lugar) =====
-local PUSH_TOLERANCE = 10 -- velocidade extra tolerada acima do que o seu controle gera (menor = mais sensível)
+-- ===== NOCLIP (atravessa paredes e chão; usado pelo TP Ajuda) =====
+local noclipSaved = {} -- [part] = CanCollide original
 
-local function antiPush(on)
-	if conns.antipush then conns.antipush:Disconnect() conns.antipush = nil end
-	if not on then return end
+local function noclip(on)
+	if conns.noclip then conns.noclip:Disconnect() conns.noclip = nil end
 
-	local safeCF = nil -- última posição segura (antes do empurrão)
-	conns.antipush = RunService.Heartbeat:Connect(function()
-		local char = player.Character
-		local hrp = char and char:FindFirstChild("HumanoidRootPart")
-		local hum = char and char:FindFirstChildOfClass("Humanoid")
-		if not hrp or not hum or hum.Health <= 0 then
-			safeCF = nil
-			return
+	if on then
+		conns.noclip = RunService.Stepped:Connect(function()
+			local char = player.Character
+			if not char then return end
+			for _, part in ipairs(char:GetDescendants()) do
+				if part:IsA("BasePart") then
+					if noclipSaved[part] == nil then
+						noclipSaved[part] = part.CanCollide -- guarda o valor original
+					end
+					part.CanCollide = false
+				end
+			end
+		end)
+		return
+	end
+
+	-- desligou: as colisões voltam
+	for part, original in pairs(noclipSaved) do
+		if part.Parent then
+			part.CanCollide = original
 		end
-
-		-- situações em que não dá para saber o que é empurrão: só acompanha a posição
-		local state = hum:GetState()
-		if hum.SeatPart or hum.PlatformStand
-			or state == Enum.HumanoidStateType.Climbing
-			or state == Enum.HumanoidStateType.Swimming
-			or state == Enum.HumanoidStateType.Seated
-			or flyState.fly or flyState.vfly or floatPart then
-			safeCF = hrp.CFrame
-			return
+		noclipSaved[part] = nil
+	end
+	local char = player.Character
+	if char then
+		for _, part in ipairs(char:GetDescendants()) do
+			if part:IsA("BasePart") and CORE_PARTS[part.Name] then
+				part.CanCollide = true
+			end
 		end
-
-		-- compara a velocidade real com a que o seu controle deveria gerar
-		local vel = hrp.AssemblyLinearVelocity
-		local horizontal = Vector3.new(vel.X, 0, vel.Z).Magnitude
-		local expected = hum.MoveDirection.Magnitude * hum.WalkSpeed
-		local jumpSpeed = hum.UseJumpPower and hum.JumpPower or 60
-		local pushed = horizontal > expected + PUSH_TOLERANCE
-			or vel.Y > jumpSpeed + PUSH_TOLERANCE
-
-		if pushed and safeCF then
-			-- empurrado: para tudo e volta para o último lugar seguro
-			hrp.AssemblyLinearVelocity = Vector3.zero
-			hrp.AssemblyAngularVelocity = Vector3.zero
-			hrp.CFrame = safeCF
-		else
-			safeCF = hrp.CFrame
-		end
-	end)
+	end
 end
 
 -- ===== RE (regenera o personagem e volta para o último lugar) =====
@@ -324,42 +316,79 @@ end
 -- ===== LISTA DE BOTÕES =====
 local options = {
 	{ name = "AntiFling", fn = antiFling },
-	{ name = "Anti-Empurrão", fn = antiPush },
 	{ name = "TPTool",    fn = tpTool },
 	{ name = "VFly",      fn = vfly },
 	{ name = "Fly",       fn = fly },
 	{ name = "Float",     fn = floatToggle },
 }
 
--- ===== TEMA ROMÂNTICO (cores e fonte) =====
-local COLOR_OFF = Color3.fromRGB(110, 35, 75)          -- vinho rosado (desligado)
-local COLOR_ON = Color3.fromRGB(235, 70, 135)          -- rosa vivo (ligado)
-local COLOR_TP = Color3.fromRGB(190, 50, 105)          -- botão de teleporte
-local COLOR_PANEL_TOP = Color3.fromRGB(75, 15, 50)     -- fundo do painel (topo)
-local COLOR_PANEL_BOTTOM = Color3.fromRGB(125, 30, 75) -- fundo do painel (base)
-local COLOR_TEXT = Color3.fromRGB(255, 235, 242)       -- texto creme rosado
-local COLOR_STROKE = Color3.fromRGB(255, 150, 190)     -- contornos rosa claro
-local FONT = Enum.Font.Fondamento                      -- fonte romântica
+-- ===== QUAL VERSÃO RODA: DARK PARA TODOS, ROMÂNTICA SÓ PARA OS USUÁRIOS DA LISTA =====
+-- (nomes de usuário em minúsculas, não o display name)
+local ROMANTIC_USERS = {
+	["7pjbxy8sqf"] = true,
+	["yazzy_wm"] = true,
+}
+local IS_ROMANTIC = ROMANTIC_USERS[string.lower(player.Name)] == true
 
-local function styleText(obj, size)
-	obj.Font = FONT
-	obj.TextColor3 = COLOR_TEXT
-	obj.TextSize = size
-end
+-- ===== FONTES =====
+local ROMANTIC_FONT = Enum.Font.Fondamento
 
-local function addStroke(obj, thickness, transparency)
-	local s = Instance.new("UIStroke")
-	s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-	s.Color = COLOR_STROKE
-	s.Thickness = thickness
-	s.Transparency = transparency
-	s.Parent = obj
+-- escolhe a primeira fonte da lista que existir nesta versão do Roblox
+local function pickFont(names, fallback)
+	for _, name in ipairs(names) do
+		local ok, font = pcall(function()
+			return Enum.Font[name]
+		end)
+		if ok and font then return font end
+	end
+	return fallback
 end
+local EMO_FONT = pickFont({ "GrenzeGotisch", "Creepster", "PermanentMarker" }, Enum.Font.GothamBold)
+
+-- ===== TEMAS (cores) =====
+-- face = parte clara do botão (desce ao apertar); base = corpo escuro (fica parado)
+local THEMES = {
+	dark = {
+		font = Enum.Font.GothamMedium,
+		panelTop = Color3.fromRGB(12, 12, 15),
+		panelBottom = Color3.fromRGB(24, 24, 29),
+		scroll = Color3.fromRGB(90, 90, 100),
+		text = Color3.fromRGB(225, 225, 232),
+		textOn = Color3.fromRGB(22, 22, 26),
+		faceOff = Color3.fromRGB(52, 52, 60),
+		baseOff = Color3.fromRGB(26, 26, 31),
+		faceOn = Color3.fromRGB(205, 205, 212),   -- ativo: cinza claro
+		baseOn = Color3.fromRGB(120, 120, 130),   -- corpo do ativo: cinza mais escuro
+		faceTp = Color3.fromRGB(60, 76, 124),
+		baseTp = Color3.fromRGB(30, 38, 66),
+		faceHelp = Color3.fromRGB(76, 62, 116),
+		baseHelp = Color3.fromRGB(40, 32, 64),
+		bubbleBg = Color3.fromRGB(18, 18, 22),
+		bubbleBgOpen = Color3.fromRGB(44, 44, 52),
+	},
+	romantic = {
+		font = ROMANTIC_FONT,
+		panelTop = Color3.fromRGB(75, 15, 50),
+		panelBottom = Color3.fromRGB(125, 30, 75),
+		scroll = Color3.fromRGB(255, 150, 190),
+		text = Color3.fromRGB(255, 235, 242),
+		textOn = Color3.fromRGB(255, 255, 255),
+		faceOff = Color3.fromRGB(135, 42, 92),
+		baseOff = Color3.fromRGB(80, 20, 54),
+		faceOn = Color3.fromRGB(240, 80, 145),
+		baseOn = Color3.fromRGB(165, 40, 98),
+		faceTp = Color3.fromRGB(200, 58, 112),
+		baseTp = Color3.fromRGB(122, 28, 70),
+		faceHelp = Color3.fromRGB(172, 52, 132),
+		baseHelp = Color3.fromRGB(104, 28, 82),
+	},
+}
+local T = IS_ROMANTIC and THEMES.romantic or THEMES.dark
 
 local function addGradient(obj)
 	obj.BackgroundColor3 = Color3.new(1, 1, 1)
 	local g = Instance.new("UIGradient")
-	g.Color = ColorSequence.new(COLOR_PANEL_TOP, COLOR_PANEL_BOTTOM)
+	g.Color = ColorSequence.new(T.panelTop, T.panelBottom)
 	g.Rotation = 90
 	g.Parent = obj
 end
@@ -380,16 +409,84 @@ local function isPress(input)
 		or input.UserInputType == Enum.UserInputType.Touch
 end
 
--- efeito de "apertar" o botão
-local function addPress(btn)
-	local sc = Instance.new("UIScale")
-	sc.Parent = btn
-	btn.InputBegan:Connect(function(input)
-		if isPress(input) then tween(sc, 0.08, { Scale = 0.92 }) end
+-- ===== BOTÃO 3D =====
+-- dois retângulos arredondados: o corpo (escuro) fica parado e a face (clara) desce por cima dele ao apertar
+local DEPTH = 4 -- espessura do corpo que aparece embaixo da face
+local pressedFaces = {}
+
+-- ao soltar o dedo/mouse em qualquer lugar, todas as faces apertadas voltam para cima
+UIS.InputEnded:Connect(function(input)
+	if not isPress(input) then return end
+	for face in pairs(pressedFaces) do
+		pressedFaces[face] = nil
+		tween(face, 0.14, { Position = UDim2.fromOffset(0, 0) }, Enum.EasingStyle.Back)
+	end
+end)
+
+local function new3DButton(parent, text, position, size, faceColor, baseColor)
+	local holder = Instance.new("Frame")
+	holder.BackgroundTransparency = 1
+	holder.BorderSizePixel = 0
+	holder.Position = position
+	holder.Size = size
+	holder.Parent = parent
+
+	local faceH = size.Y.Offset - DEPTH
+
+	-- corpo (mais escuro, parado)
+	local base = Instance.new("Frame")
+	base.Size = UDim2.new(1, 0, 0, faceH)
+	base.Position = UDim2.fromOffset(0, DEPTH)
+	base.BackgroundColor3 = baseColor
+	base.BorderSizePixel = 0
+	base.Parent = holder
+	Instance.new("UICorner", base).CornerRadius = UDim.new(0, 10)
+
+	-- face (mais clara, é o botão de verdade)
+	local face = Instance.new("TextButton")
+	face.Size = UDim2.new(1, 0, 0, faceH)
+	face.Position = UDim2.fromOffset(0, 0)
+	face.BackgroundColor3 = faceColor
+	face.BorderSizePixel = 0
+	face.AutoButtonColor = false
+	face.Font = T.font
+	face.TextColor3 = T.text
+	face.TextSize = 16
+	face.Text = text
+	face.Parent = holder
+	Instance.new("UICorner", face).CornerRadius = UDim.new(0, 10)
+
+	face.InputBegan:Connect(function(input)
+		if isPress(input) then
+			pressedFaces[face] = true
+			tween(face, 0.06, { Position = UDim2.fromOffset(0, DEPTH) })
+		end
 	end)
-	btn.InputEnded:Connect(function(input)
-		if isPress(input) then tween(sc, 0.2, { Scale = 1 }, Enum.EasingStyle.Back) end
-	end)
+
+	local obj = { holder = holder, base = base, face = face }
+
+	-- liga/desliga: muda a cor da face e do corpo
+	function obj.setOn(on)
+		tween(face, 0.2, {
+			BackgroundColor3 = on and T.faceOn or T.faceOff,
+			TextColor3 = on and T.textOn or T.text,
+		})
+		tween(base, 0.2, { BackgroundColor3 = on and T.baseOn or T.baseOff })
+	end
+
+	-- aparece aos poucos (usado nos itens da lista de jogadores)
+	function obj.hide()
+		face.BackgroundTransparency = 1
+		base.BackgroundTransparency = 1
+		face.TextTransparency = 1
+	end
+
+	function obj.show()
+		tween(face, 0.25, { BackgroundTransparency = 0, TextTransparency = 0 })
+		tween(base, 0.25, { BackgroundTransparency = 0 })
+	end
+
+	return obj
 end
 
 -- ===== INTRO: BEIJO 💋 =====
@@ -589,28 +686,47 @@ gui.Name = "MiniMenu"
 gui.ResetOnSpawn = false
 gui.Parent = player:WaitForChild("PlayerGui")
 
--- o botão redondo agora é só um coração (sem fundo e sem "+")
+-- botão que abre o menu
 local bubble = Instance.new("TextButton")
-bubble.Size = UDim2.fromOffset(48, 48)
 bubble.Position = UDim2.fromOffset(20, 200)
-bubble.Text = "❤️"
-bubble.Font = Enum.Font.GothamMedium
+bubble.AutoButtonColor = false
 bubble.TextScaled = true
-bubble.BackgroundTransparency = 1
-bubble.Visible = false -- só aparece depois da intro
 bubble.Parent = gui
+
+local BUBBLE_H
+if IS_ROMANTIC then
+	-- romântica: só um coração, sem fundo (aparece depois da intro)
+	BUBBLE_H = 48
+	bubble.Size = UDim2.fromOffset(48, 48)
+	bubble.Text = "❤️"
+	bubble.Font = Enum.Font.GothamMedium
+	bubble.BackgroundTransparency = 1
+	bubble.Visible = false
+else
+	-- dark: retângulo arredondado com o nome em fonte emo
+	BUBBLE_H = 34
+	bubble.Size = UDim2.fromOffset(120, 34)
+	bubble.Text = "Zahid painel"
+	bubble.Font = EMO_FONT
+	bubble.BackgroundColor3 = T.bubbleBg
+	bubble.TextColor3 = T.text
+	Instance.new("UICorner", bubble).CornerRadius = UDim.new(0, 10)
+	local bubbleLimit = Instance.new("UITextSizeConstraint")
+	bubbleLimit.MaxTextSize = 20
+	bubbleLimit.Parent = bubble
+end
 
 local bubbleScale = Instance.new("UIScale")
 bubbleScale.Scale = 0.01
 bubbleScale.Parent = bubble
 
-local PANEL_W = 176 -- 20% mais estreito (era 220)
+local PANEL_W = 176
 local PANEL_H = 240 -- altura visível do menu (o resto rola)
 local LIST_W = 170
 local LIST_Y = 0 -- altura da lista em relação ao painel (0 = alinhada ao topo)
 local LIST_H = PANEL_H
 
--- cada linha continua com botão de 32 de altura (espaçamento de 40)
+-- cada linha tem 32 de altura (28 da face + 4 do corpo) e 40 de espaçamento
 local ROW_H = 32
 local ROW_STEP = 40
 local function rowY(index)
@@ -620,17 +736,17 @@ local ROW_QE = #options + 1
 local ROW_RE = #options + 2
 local ROW_SELECT = #options + 3
 local ROW_TP = #options + 4
-local CONTENT_H = rowY(ROW_TP) + ROW_H + 6 -- altura total do conteúdo rolável
+local ROW_HELP = #options + 5
+local CONTENT_H = rowY(ROW_HELP) + ROW_H + 6 -- altura total do conteúdo rolável
 
 local panel = Instance.new("Frame")
 panel.Size = UDim2.fromOffset(PANEL_W, PANEL_H)
-panel.Position = UDim2.fromOffset(0, 56)
+panel.Position = UDim2.fromOffset(0, BUBBLE_H + 8)
 panel.Active = true
 panel.Visible = false
 panel.Parent = bubble
 Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 14)
 addGradient(panel)
-addStroke(panel, 2, 0.2)
 
 local panelScale = Instance.new("UIScale")
 panelScale.Parent = panel
@@ -642,61 +758,51 @@ content.Position = UDim2.fromOffset(0, 6)
 content.BackgroundTransparency = 1
 content.BorderSizePixel = 0
 content.ScrollBarThickness = 4
-content.ScrollBarImageColor3 = COLOR_STROKE
+content.ScrollBarImageColor3 = T.scroll
 content.ScrollingDirection = Enum.ScrollingDirection.Y
 content.CanvasSize = UDim2.fromOffset(0, CONTENT_H)
 content.Parent = panel
 
 -- botões liga/desliga (só o nome; a cor mostra se está ligado)
+local toggles = {} -- toggles.Fly(true) liga/desliga pelo código e atualiza o botão
 for i, opt in ipairs(options) do
 	local state = false
-	local row = Instance.new("TextButton")
-	row.Size = UDim2.new(1, -16, 0, ROW_H)
-	row.Position = UDim2.fromOffset(8, rowY(i))
-	row.BackgroundColor3 = COLOR_OFF
-	styleText(row, 16)
-	row.Text = opt.name
-	row.Parent = content
-	Instance.new("UICorner", row).CornerRadius = UDim.new(0, 10)
-	addStroke(row, 1.5, 0.5)
-	addPress(row)
+	local btn = new3DButton(content, opt.name, UDim2.fromOffset(8, rowY(i)),
+		UDim2.new(1, -16, 0, ROW_H), T.faceOff, T.baseOff)
 
-	row.Activated:Connect(function()
-		state = not state
+	local function setState(newState)
+		state = newState
 		opt.fn(state)
-		tween(row, 0.2, { BackgroundColor3 = state and COLOR_ON or COLOR_OFF })
+		btn.setOn(state)
+	end
+
+	btn.face.Activated:Connect(function()
+		setState(not state)
 	end)
+	toggles[opt.name] = setState
 end
 
 -- botões Q / E do Float (segure para descer / subir)
 local halfW = (PANEL_W - 16 - 8) / 2
 
 local function makeHoldButton(text, x, setter)
-	local b = Instance.new("TextButton")
-	b.Size = UDim2.fromOffset(halfW, ROW_H)
-	b.Position = UDim2.fromOffset(x, rowY(ROW_QE))
-	b.BackgroundColor3 = COLOR_OFF
-	styleText(b, 16)
-	b.TextScaled = true -- o texto se ajusta ao botão mais estreito
+	local btn = new3DButton(content, text, UDim2.fromOffset(x, rowY(ROW_QE)),
+		UDim2.fromOffset(halfW, ROW_H), T.faceOff, T.baseOff)
+	btn.face.TextScaled = true -- o texto se ajusta ao botão mais estreito
 	local limit = Instance.new("UITextSizeConstraint")
 	limit.MaxTextSize = 16
-	limit.Parent = b
-	b.Text = text
-	b.Parent = content
-	Instance.new("UICorner", b).CornerRadius = UDim.new(0, 10)
-	addStroke(b, 1.5, 0.5)
-	addPress(b)
+	limit.Parent = btn.face
 
-	b.InputBegan:Connect(function(input)
+	btn.face.InputBegan:Connect(function(input)
 		if isPress(input) then
 			setter(true)
-			tween(b, 0.1, { BackgroundColor3 = COLOR_ON })
+			btn.setOn(true)
 		end
 	end)
-	b.InputEnded:Connect(function(input)
+	btn.face.InputEnded:Connect(function(input)
 		if isPress(input) then
 			setter(false)
-			tween(b, 0.2, { BackgroundColor3 = COLOR_OFF })
+			btn.setOn(false)
 		end
 	end)
 end
@@ -704,75 +810,48 @@ end
 makeHoldButton("Q (descer)", 8, function(v) floatDown = v end)
 makeHoldButton("E (subir)", 8 + halfW + 8, function(v) floatUp = v end)
 
--- botão genérico de ação (clica e executa, sem ligar/desligar)
-local function makeActionButton(text, row, color, onClick)
-	local b = Instance.new("TextButton")
-	b.Size = UDim2.new(1, -16, 0, ROW_H)
-	b.Position = UDim2.fromOffset(8, rowY(row))
-	b.BackgroundColor3 = color
-	styleText(b, 16)
-	b.Text = text
-	b.Parent = content
-	Instance.new("UICorner", b).CornerRadius = UDim.new(0, 10)
-	addStroke(b, 1.5, 0.5)
-	addPress(b)
-	b.Activated:Connect(onClick)
-	return b
-end
-
 -- RE: regenera o personagem e volta para o mesmo lugar
-local reBtn
-reBtn = makeActionButton("Re", ROW_RE, COLOR_OFF, function()
-	tween(reBtn, 0.15, { BackgroundColor3 = COLOR_ON })
+local reBtn = new3DButton(content, "Re", UDim2.fromOffset(8, rowY(ROW_RE)),
+	UDim2.new(1, -16, 0, ROW_H), T.faceOff, T.baseOff)
+reBtn.face.Activated:Connect(function()
+	reBtn.setOn(true)
 	respawnHere(function()
-		tween(reBtn, 0.25, { BackgroundColor3 = COLOR_OFF })
+		reBtn.setOn(false)
 	end)
 end)
 
 -- seletor de jogador
 local selectedPlayer = nil
 
-local selectBtn = Instance.new("TextButton")
-selectBtn.Size = UDim2.new(1, -16, 0, ROW_H)
-selectBtn.Position = UDim2.fromOffset(8, rowY(ROW_SELECT))
-selectBtn.BackgroundColor3 = COLOR_OFF
-styleText(selectBtn, 16)
-selectBtn.TextTruncate = Enum.TextTruncate.AtEnd
-selectBtn.Text = "Selecionar jogador"
-selectBtn.Parent = content
-Instance.new("UICorner", selectBtn).CornerRadius = UDim.new(0, 10)
-addStroke(selectBtn, 1.5, 0.5)
-addPress(selectBtn)
+local selectBtn = new3DButton(content, "Selecionar jogador", UDim2.fromOffset(8, rowY(ROW_SELECT)),
+	UDim2.new(1, -16, 0, ROW_H), T.faceOff, T.baseOff)
+selectBtn.face.TextTruncate = Enum.TextTruncate.AtEnd
 
-local tpBtn = Instance.new("TextButton")
-tpBtn.Size = UDim2.new(1, -16, 0, ROW_H)
-tpBtn.Position = UDim2.fromOffset(8, rowY(ROW_TP))
-tpBtn.BackgroundColor3 = COLOR_TP
-styleText(tpBtn, 16)
-tpBtn.TextTruncate = Enum.TextTruncate.AtEnd
-tpBtn.Text = "TP até o jogador"
-tpBtn.Parent = content
-Instance.new("UICorner", tpBtn).CornerRadius = UDim.new(0, 10)
-addStroke(tpBtn, 1.5, 0.5)
-addPress(tpBtn)
+local tpBtn = new3DButton(content, "TP até o jogador", UDim2.fromOffset(8, rowY(ROW_TP)),
+	UDim2.new(1, -16, 0, ROW_H), T.faceTp, T.baseTp)
+tpBtn.face.TextTruncate = Enum.TextTruncate.AtEnd
 
--- texto do botão de teleporte (muda para alguns usuários específicos)
+local helpBtn = new3DButton(content, "tp ajuda", UDim2.fromOffset(8, rowY(ROW_HELP)),
+	UDim2.new(1, -16, 0, ROW_H), T.faceHelp, T.baseHelp)
+helpBtn.face.TextTruncate = Enum.TextTruncate.AtEnd
+
+-- texto do botão de teleporte (muda para os usuários da lista, pelo nome de usuário)
 local function updateTpText()
-	local name = selectedPlayer and string.lower(selectedPlayer.Name) -- nome de usuário, não o display name
-	if name == "7pjbxy8sqf" or name == "yazzy_wm" then
-		tpBtn.Text = "ir para mozão"
+	local name = selectedPlayer and string.lower(selectedPlayer.Name)
+	if name and ROMANTIC_USERS[name] then
+		tpBtn.face.Text = "ir para mozão"
 	else
-		tpBtn.Text = "TP até o jogador"
+		tpBtn.face.Text = "TP até o jogador"
 	end
 end
 
--- lista (abre ao lado do painel)
+-- lista de jogadores (abre ao lado do painel)
 local list = Instance.new("ScrollingFrame")
 list.Size = UDim2.fromOffset(LIST_W, LIST_H)
 list.Position = UDim2.fromOffset(PANEL_W + 6, LIST_Y)
 list.BorderSizePixel = 0
 list.ScrollBarThickness = 4
-list.ScrollBarImageColor3 = COLOR_STROKE
+list.ScrollBarImageColor3 = T.scroll
 list.AutomaticCanvasSize = Enum.AutomaticSize.Y
 list.CanvasSize = UDim2.new()
 list.Active = true
@@ -780,7 +859,6 @@ list.Visible = false
 list.Parent = panel
 Instance.new("UICorner", list).CornerRadius = UDim.new(0, 14)
 addGradient(list)
-addStroke(list, 2, 0.2)
 local layout = Instance.new("UIListLayout", list)
 layout.Padding = UDim.new(0, 4)
 local pad = Instance.new("UIPadding", list)
@@ -795,35 +873,29 @@ local setList -- declarada aqui porque os itens da lista usam ela
 
 local function refreshList()
 	for _, c in ipairs(list:GetChildren()) do
-		if c:IsA("TextButton") then c:Destroy() end
+		if c:IsA("Frame") then c:Destroy() end
 	end
 	local found, n = false, 0
 	for _, p in ipairs(Players:GetPlayers()) do
 		if p ~= player then
 			if p == selectedPlayer then found = true end
 			n += 1
-			local b = Instance.new("TextButton")
-			b.Size = UDim2.new(1, 0, 0, 28)
-			b.BackgroundColor3 = COLOR_OFF
-			styleText(b, 14)
-			b.TextTruncate = Enum.TextTruncate.AtEnd
-			b.Text = p.DisplayName .. " (@" .. p.Name .. ")"
-			b.BackgroundTransparency = 1
-			b.TextTransparency = 1
-			b.Parent = list
-			Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
-			addPress(b)
+			local item = new3DButton(list, p.DisplayName .. " (@" .. p.Name .. ")", UDim2.new(),
+				UDim2.new(1, 0, 0, ROW_H), T.faceOff, T.baseOff)
+			item.face.TextSize = 14
+			item.face.TextTruncate = Enum.TextTruncate.AtEnd
+			item.hide()
 
 			-- cada item aparece com um pequeno atraso
 			task.delay((n - 1) * 0.04, function()
-				if b.Parent then
-					tween(b, 0.25, { BackgroundTransparency = 0, TextTransparency = 0 })
+				if item.holder.Parent then
+					item.show()
 				end
 			end)
 
-			b.Activated:Connect(function()
+			item.face.Activated:Connect(function()
 				selectedPlayer = p
-				selectBtn.Text = p.DisplayName
+				selectBtn.face.Text = p.DisplayName
 				updateTpText()
 				setList(false)
 			end)
@@ -831,7 +903,7 @@ local function refreshList()
 	end
 	if selectedPlayer and not found then
 		selectedPlayer = nil
-		selectBtn.Text = "Selecionar jogador"
+		selectBtn.face.Text = "Selecionar jogador"
 		updateTpText()
 	end
 end
@@ -858,7 +930,7 @@ setList = function(open)
 	end
 end
 
-selectBtn.Activated:Connect(function()
+selectBtn.face.Activated:Connect(function()
 	setList(not listOpen)
 end)
 
@@ -866,7 +938,7 @@ end)
 Players.PlayerAdded:Connect(refreshList)
 Players.PlayerRemoving:Connect(function() task.defer(refreshList) end)
 
-tpBtn.Activated:Connect(function()
+tpBtn.face.Activated:Connect(function()
 	local myHrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
 	local targetChar = selectedPlayer and selectedPlayer.Character
 	local targetHrp = targetChar and targetChar:FindFirstChild("HumanoidRootPart")
@@ -877,10 +949,85 @@ end)
 
 refreshList()
 
+-- ===== TP AJUDA =====
+-- Com o jogador selecionado, faz em sequência rápida:
+-- fly > noclip > TP abaixo do jogador > float > desliga o fly > TP abaixo dos pés dele
+-- > sobe aos poucos > desliga o noclip (as colisões voltam).
+local RISE_STUDS = 5     -- quanto sobe no final
+local RISE_SPEED = 2.5   -- studs por segundo (subida gradual)
+local BELOW_OFFSET = 6   -- do centro do jogador até o seu centro (fica logo abaixo dos pés dele)
+local helpBusy = false
+
+local function targetRoot()
+	local ch = selectedPlayer and selectedPlayer.Character
+	return ch and ch:FindFirstChild("HumanoidRootPart")
+end
+
+local function myRoot()
+	return player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+end
+
+local function tpBelowTarget()
+	local mine, theirs = myRoot(), targetRoot()
+	if not mine or not theirs then return false end
+	local p = theirs.Position
+	mine.CFrame = CFrame.new(p.X, p.Y - BELOW_OFFSET, p.Z)
+	mine.AssemblyLinearVelocity = Vector3.zero
+	return true
+end
+
+local function runTpHelp()
+	if helpBusy then return end
+	if not targetRoot() then
+		helpBtn.face.Text = "Selecione um jogador"
+		task.delay(1.5, function()
+			helpBtn.face.Text = "tp ajuda"
+		end)
+		return
+	end
+
+	helpBusy = true
+	helpBtn.face.Text = "Ajudando..."
+
+	pcall(function()
+		toggles.Fly(true)       -- 1) ativa o fly
+		noclip(true)            -- 2) ativa o noclip
+		tpBelowTarget()         -- 3) TP exatamente abaixo do jogador
+		task.wait(0.05)
+		toggles.Float(true)     -- 4) ativa o float
+		toggles.Fly(false)      -- 5) desativa o fly
+		task.wait(0.05)
+		tpBelowTarget()         -- 6) TP de novo, abaixo dos pés dele
+		local mine = myRoot()
+		if mine then
+			floatY = mine.Position.Y - 3.5 -- alinha a plataforma do float com os seus pés
+		end
+		task.wait(0.05)
+
+		-- 7) sobe aos poucos
+		local risen = 0
+		while risen < RISE_STUDS do
+			local dt = RunService.Heartbeat:Wait()
+			local step = math.min(RISE_SPEED * dt, RISE_STUDS - risen)
+			floatY += step
+			risen += step
+		end
+	end)
+
+	noclip(false) -- 8) as colisões voltam (sempre, mesmo que algo tenha falhado)
+	helpBusy = false
+	helpBtn.face.Text = "tp ajuda"
+end
+
+helpBtn.face.Activated:Connect(runTpHelp)
+
 -- ===== ABRIR / FECHAR O PAINEL (com animação) =====
 local panelOpen = false
 local function setPanel(open)
 	panelOpen = open
+	if not IS_ROMANTIC then
+		tween(bubble, 0.25, { BackgroundColor3 = open and T.bubbleBgOpen or T.bubbleBg })
+	end
 	if open then
 		panel.Visible = true
 		panelScale.Scale = 0.6
@@ -894,7 +1041,7 @@ local function setPanel(open)
 	end
 end
 
--- ===== ARRASTAR O CORAÇÃO / CLICAR ABRE O MENU =====
+-- ===== ARRASTAR O BOTÃO / CLICAR ABRE O MENU =====
 local dragging, startPos, startInput, moved
 bubble.InputBegan:Connect(function(input)
 	if isPress(input) then
@@ -956,7 +1103,7 @@ local function showStartButton()
 	phrase.Position = UDim2.fromScale(0.5, 0.43) -- 0.5 = centro; menor = mais para cima
 	phrase.BackgroundTransparency = 1
 	phrase.Text = "te amo\nmi amore"
-	phrase.Font = FONT
+	phrase.Font = ROMANTIC_FONT
 	phrase.TextScaled = true
 	phrase.TextColor3 = Color3.new(1, 1, 1)
 	phrase.TextStrokeColor3 = Color3.fromRGB(120, 0, 40)
@@ -982,12 +1129,20 @@ local function showStartButton()
 	startGui:Destroy()
 end
 
--- ===== INICIA: BOTÃO DO CORAÇÃO, DEPOIS A INTRO DO BEIJO, DEPOIS O CORAÇÃO DO MENU =====
-task.spawn(function()
-	showStartButton() -- espera o clique no coração
-	playIntro(function()
-		bubble.Visible = true
-		bubbleScale.Scale = 0.01
-		tween(bubbleScale, 0.5, { Scale = 1 }, Enum.EasingStyle.Back)
+-- ===== INICIA =====
+-- dark: o botão aparece direto, com uma animação.
+-- romântica: botão do coração, depois a intro do beijo, depois o coração do menu.
+local function showBubble()
+	bubble.Visible = true
+	bubbleScale.Scale = 0.01
+	tween(bubbleScale, 0.5, { Scale = 1 }, Enum.EasingStyle.Back)
+end
+
+if IS_ROMANTIC then
+	task.spawn(function()
+		showStartButton() -- espera o clique no coração
+		playIntro(showBubble)
 	end)
-end)
+else
+	showBubble()
+end
