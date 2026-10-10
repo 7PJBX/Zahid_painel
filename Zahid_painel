@@ -480,6 +480,219 @@ local function serverHop()
 	return true
 end
 
+-- ===== AUTO FARM: POSIÇÃO FIXA + USO CONTÍNUO + RECONEXÃO =====
+-- "Definir posição" guarda onde você está. "Auto farm" (ligado):
+--  * se o jogo te teleportar ou você morrer, volta para a posição definida;
+--  * usa a ferramenta da mão a cada 5 segundos (se não houver, equipa a do slot 2);
+--  * se a conexão cair (erro 277 etc.), tenta reconectar sozinho; ao voltar,
+--    o estado é restaurado (posição, auto farm ligado e ferramenta do slot 2).
+-- Para restaurar depois de reconectar, o script precisa rodar de novo no novo servidor:
+--  * o link do script está em SCRIPT_URL (ele precisa conter esta versão do script), OU salve este
+--    script com o nome de SCRIPT_FILE na pasta workspace do executor (deixando SCRIPT_URL vazio),
+--    OU deixe-o na pasta autoexec (e use USE_QUEUE = false).
+local GuiService = game:GetService("GuiService")
+
+local FARM_FILE = "ZahidPainel_farm.json" -- onde a posição e o estado ficam salvos
+local SCRIPT_FILE = "Zahid_painel.lua"    -- nome deste script na pasta workspace do executor
+local SCRIPT_URL = "https://raw.githubusercontent.com/7PJBX/Zahid_painel/refs/heads/main/Zahid_painel" -- link (raw) do script
+local USE_QUEUE = true                    -- false se o script já roda sozinho pela pasta autoexec
+local TELEPORT_JUMP = 15                  -- deslocamento em 1 frame (studs) que conta como teleporte
+local USE_INTERVAL = 5                    -- segundos entre cada uso da ferramenta
+
+local farmOn = false
+local farmCFrame = nil       -- posição definida
+local farmToolName = nil     -- ferramenta que está sendo usada
+local farmLastPos = nil
+local farmLastReturn = 0
+local farmLastUse = 0
+local farmLastEquip = 0
+local farmGoToken = 0
+local farmQueued = false
+local farmReconnecting = false
+
+local function farmRoot()
+	return player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+end
+
+-- salva posição e estado em arquivo (se o executor tiver writefile)
+local function farmSave()
+	if not writefile then return end
+	local data = { placeId = game.PlaceId, active = farmOn }
+	if farmCFrame then data.cf = { farmCFrame:GetComponents() } end
+	pcall(function()
+		writefile(FARM_FILE, HttpService:JSONEncode(data))
+	end)
+end
+
+local function farmLoad()
+	if not (readfile and isfile) then return nil end
+	local ok, data = pcall(function()
+		if not isfile(FARM_FILE) then return nil end
+		return HttpService:JSONDecode(readfile(FARM_FILE))
+	end)
+	if ok and type(data) == "table" and data.placeId == game.PlaceId then return data end
+	return nil
+end
+
+-- pede ao executor para rodar este script de novo depois do teleporte de reconexão
+local function farmQueueSelf()
+	if farmQueued or not USE_QUEUE then return end
+	local q = queue_on_teleport or (syn and syn.queue_on_teleport)
+	if not q then return end
+	local code
+	if SCRIPT_URL ~= "" then
+		code = 'loadstring(game:HttpGet("' .. SCRIPT_URL .. '"))()'
+	else
+		code = 'loadstring(readfile("' .. SCRIPT_FILE .. '"))()'
+	end
+	if pcall(q, code) then farmQueued = true end
+end
+
+-- vai para a posição definida (repete por uns segundos, pois o jogo também posiciona o personagem)
+local function farmGoTo()
+	farmGoToken += 1
+	local token = farmGoToken
+	task.spawn(function()
+		local char = player.Character or player.CharacterAdded:Wait()
+		local hrp = char:WaitForChild("HumanoidRootPart", 10)
+		if not hrp then return end
+		for _ = 1, 20 do
+			if not farmOn or farmGoToken ~= token or not hrp.Parent then return end
+			hrp.CFrame = farmCFrame
+			hrp.AssemblyLinearVelocity = Vector3.zero
+			farmLastPos = nil
+			task.wait(0.15)
+		end
+	end)
+end
+
+-- equipa a ferramenta usada antes; se não achar, a do slot 2 (ordem da mochila)
+local function farmEquip()
+	local char = player.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	local backpack = player:FindFirstChildOfClass("Backpack")
+	if not hum or not backpack or hum.Health <= 0 then return end
+
+	local tool = farmToolName and backpack:FindFirstChild(farmToolName)
+	if not (tool and tool:IsA("Tool")) then
+		local list = {}
+		for _, c in ipairs(backpack:GetChildren()) do
+			if c:IsA("Tool") then table.insert(list, c) end
+		end
+		tool = list[2] or list[1]
+	end
+	if tool then
+		farmToolName = tool.Name
+		hum:EquipTool(tool)
+	end
+end
+
+-- tenta voltar ao jogo quando a conexão cai
+local function farmReconnect()
+	if farmReconnecting or not farmOn then return end
+	farmReconnecting = true
+	farmSave()
+	farmQueueSelf()
+	task.spawn(function()
+		local attempt = 0
+		while farmOn do
+			attempt += 1
+			pcall(function()
+				if attempt <= 3 then
+					-- primeiro tenta o mesmo servidor
+					TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, player)
+				else
+					-- se ele já fechou, entra em outro
+					TeleportService:Teleport(game.PlaceId, player)
+				end
+			end)
+			task.wait(8) -- sem internet o teleporte falha; tenta de novo
+		end
+		farmReconnecting = false
+	end)
+end
+
+local function farmEnable(on)
+	for _, k in ipairs({ "farmHB", "farmChar", "farmErr1", "farmErr2", "farmIdle" }) do
+		if conns[k] then conns[k]:Disconnect() conns[k] = nil end
+	end
+	farmOn = on
+	farmSave()
+	if not on then return end
+	if not farmCFrame then farmOn = false return end
+
+	farmQueueSelf()
+	farmGoTo()
+	farmLastPos = nil
+
+	-- loop principal: volta se for teleportado + usa a ferramenta sem parar
+	conns.farmHB = RunService.Heartbeat:Connect(function()
+		local char = player.Character
+		local hrp = char and char:FindFirstChild("HumanoidRootPart")
+		if not hrp then farmLastPos = nil return end
+		local now = os.clock()
+
+		-- 1) o jogo me teleportou? volta para a posição definida
+		if farmLastPos and (hrp.Position - farmLastPos).Magnitude > TELEPORT_JUMP then
+			if now - farmLastReturn > 0.3 then
+				hrp.CFrame = farmCFrame
+				hrp.AssemblyLinearVelocity = Vector3.zero
+				farmLastReturn = now
+				farmLastPos = farmCFrame.Position
+			end
+		else
+			farmLastPos = hrp.Position
+		end
+
+		-- 2) usa a ferramenta da mão a cada USE_INTERVAL segundos; sem ferramenta, equipa a do slot 2
+		local tool = char:FindFirstChildOfClass("Tool")
+		if tool then
+			farmToolName = tool.Name
+			if now - farmLastUse >= USE_INTERVAL then
+				farmLastUse = now
+				tool:Activate()
+			end
+		elseif now - farmLastEquip >= 0.5 then
+			farmLastEquip = now
+			farmEquip()
+		end
+	end)
+
+	-- morreu: ao renascer volta para a posição definida
+	conns.farmChar = player.CharacterAdded:Connect(function()
+		farmLastPos = nil
+		farmGoTo()
+	end)
+
+	-- queda de conexão (erro 277 etc.): reconecta sozinho
+	conns.farmErr1 = GuiService.ErrorMessageChanged:Connect(function()
+		local msg = string.lower(GuiService:GetErrorMessage() or "")
+		if msg:find("277") or msg:find("connection") or msg:find("conex") then
+			farmReconnect()
+		end
+	end)
+	task.spawn(function()
+		pcall(function()
+			local gui = game:GetService("CoreGui"):WaitForChild("RobloxPromptGui", 10)
+			local overlay = gui and gui:WaitForChild("promptOverlay", 10)
+			if overlay and farmOn and not conns.farmErr2 then
+				conns.farmErr2 = overlay.ChildAdded:Connect(function(child)
+					if child.Name == "ErrorPrompt" then farmReconnect() end
+				end)
+			end
+		end)
+	end)
+
+	-- anti-idle: evita ser expulso por ficar parado
+	conns.farmIdle = player.Idled:Connect(function()
+		pcall(function()
+			local vu = game:GetService("VirtualUser")
+			vu:CaptureController()
+			vu:ClickButton2(Vector2.new())
+		end)
+	end)
+end
+
 -- ===== LISTA DE BOTÕES =====
 local options = {
 	{ name = "AntiFling", fn = antiFling },
@@ -911,7 +1124,9 @@ local ROW_TP = #options + 4
 local ROW_HELP = #options + 5
 local ROW_REJOIN = #options + 6
 local ROW_HOP = #options + 7
-local CONTENT_H = rowY(ROW_HOP) + ROW_H + 6 -- altura total do conteúdo rolável
+local ROW_SETPOS = #options + 8
+local ROW_FARM = #options + 9
+local CONTENT_H = rowY(ROW_FARM) + ROW_H + 6 -- altura total do conteúdo rolável
 
 local panel = Instance.new("Frame")
 panel.Size = UDim2.fromOffset(PANEL_W, PANEL_H)
@@ -1014,6 +1229,14 @@ local rejoinBtn = new3DButton(content, "Rejoin", UDim2.fromOffset(8, rowY(ROW_RE
 
 local hopBtn = new3DButton(content, "Server hop", UDim2.fromOffset(8, rowY(ROW_HOP)),
 	UDim2.new(1, -16, 0, ROW_H), T.faceNet, T.baseNet)
+
+local setPosBtn = new3DButton(content, "Definir posição", UDim2.fromOffset(8, rowY(ROW_SETPOS)),
+	UDim2.new(1, -16, 0, ROW_H), T.faceTp, T.baseTp)
+setPosBtn.face.TextTruncate = Enum.TextTruncate.AtEnd
+
+local farmBtn = new3DButton(content, "Auto farm", UDim2.fromOffset(8, rowY(ROW_FARM)),
+	UDim2.new(1, -16, 0, ROW_H), T.faceOff, T.baseOff)
+farmBtn.face.TextTruncate = Enum.TextTruncate.AtEnd
 
 -- texto do botão de teleporte (muda para os usuários da lista, pelo nome de usuário)
 local function updateTpText()
@@ -1267,6 +1490,46 @@ hopBtn.face.Activated:Connect(function()
 		hopBtn.setOn(false)
 		netBusy = false
 	end)
+end)
+
+-- ===== AUTO FARM (botões) =====
+setPosBtn.face.Activated:Connect(function()
+	local hrp = farmRoot()
+	if not hrp then return end
+	farmCFrame = hrp.CFrame
+	farmSave()
+	setPosBtn.face.Text = "Posição salva!"
+	task.delay(1.2, function()
+		setPosBtn.face.Text = "Definir posição"
+	end)
+end)
+
+farmBtn.face.Activated:Connect(function()
+	if not farmOn and not farmCFrame then
+		farmBtn.face.TextSize = 11
+		farmBtn.face.Text = "Defina uma posição primeiro"
+		task.delay(1.8, function()
+			farmBtn.face.Text = "Auto farm"
+			farmBtn.face.TextSize = 16
+		end)
+		return
+	end
+	farmEnable(not farmOn)
+	farmBtn.setOn(farmOn)
+end)
+
+-- depois de reconectar: restaura a posição e religa o auto farm se ele estava ativo
+task.spawn(function()
+	local data = farmLoad()
+	if not data then return end
+	if type(data.cf) == "table" and #data.cf == 12 then
+		farmCFrame = CFrame.new(table.unpack(data.cf))
+	end
+	if data.active and farmCFrame then
+		if not game:IsLoaded() then game.Loaded:Wait() end
+		farmEnable(true)
+		farmBtn.setOn(farmOn)
+	end
 end)
 
 -- ===== ABRIR / FECHAR O PAINEL (com animação) =====
