@@ -2,6 +2,9 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
+local TeleportService = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
+local Lighting = game:GetService("Lighting")
 local player = Players.LocalPlayer
 
 local conns = {}
@@ -313,6 +316,170 @@ local function respawnHere(onDone)
 	end)
 end
 
+-- ===== FPS BOOST (sem mexer na distância de renderização) =====
+-- Desliga sombras, efeitos pesados, partículas, reflexos e detalhes de malha,
+-- simplifica materiais e destrava o limite de FPS (se o executor tiver setfpscap).
+-- Não mexe no QualityLevel nem no alcance de renderização.
+-- Tudo volta ao normal quando o botão é desligado.
+local fpsSaved = {} -- [instância] = { [propriedade] = valor original }
+local fpsToken = 0
+
+local PART_FAST = { CastShadow = false, Reflectance = 0, Material = Enum.Material.SmoothPlastic }
+local MESH_FAST = { RenderFidelity = Enum.RenderFidelity.Performance }
+local EMIT_OFF = { Enabled = false }
+local TERRAIN_FAST = { Decoration = false, WaterWaveSize = 0, WaterWaveSpeed = 0, WaterReflectance = 0 }
+local LIGHT_FAST = { GlobalShadows = false }
+
+local function getProp(inst, prop) return inst[prop] end
+local function setProp(inst, prop, value) inst[prop] = value end
+
+local function fpsApply(inst, props)
+	local saved = fpsSaved[inst]
+	if not saved then
+		saved = {}
+		fpsSaved[inst] = saved
+	end
+	for prop, value in pairs(props) do
+		local ok, cur = pcall(getProp, inst, prop)
+		if ok and cur ~= value then
+			if saved[prop] == nil then saved[prop] = cur end -- guarda o original
+			pcall(setProp, inst, prop, value)
+		end
+	end
+end
+
+local function fpsHandle(inst)
+	if inst:IsA("Terrain") then
+		fpsApply(inst, TERRAIN_FAST)
+	elseif inst:IsA("BasePart") then
+		-- não mexe nos personagens (jogadores e NPCs), para ninguém ficar com aparência estranha
+		local model = inst:FindFirstAncestorOfClass("Model")
+		if model and model:FindFirstChildOfClass("Humanoid") then return end
+		fpsApply(inst, PART_FAST)
+		if inst:IsA("MeshPart") then fpsApply(inst, MESH_FAST) end
+	elseif inst:IsA("PostEffect") or inst:IsA("ParticleEmitter") or inst:IsA("Trail")
+		or inst:IsA("Beam") or inst:IsA("Fire") or inst:IsA("Smoke") or inst:IsA("Sparkles") then
+		fpsApply(inst, EMIT_OFF)
+	end
+end
+
+local function fpsBoost(on)
+	fpsToken += 1
+	local token = fpsToken
+	if conns.fpsWs then conns.fpsWs:Disconnect() conns.fpsWs = nil end
+	if conns.fpsLt then conns.fpsLt:Disconnect() conns.fpsLt = nil end
+
+	-- limite de FPS (só funciona em executores que têm setfpscap)
+	pcall(function()
+		if setfpscap then setfpscap(on and 999 or 60) end
+	end)
+
+	if not on then
+		-- desligou: devolve tudo ao valor original, aos poucos para não travar
+		local old = fpsSaved
+		fpsSaved = {}
+		task.spawn(function()
+			local n = 0
+			for inst, props in pairs(old) do
+				if inst.Parent then
+					for prop, value in pairs(props) do
+						pcall(setProp, inst, prop, value)
+					end
+				end
+				n += 1
+				if n % 300 == 0 then task.wait() end
+			end
+		end)
+		return
+	end
+
+	fpsApply(Lighting, LIGHT_FAST)
+
+	-- o que aparecer depois (mapas com streaming, efeitos novos) também é otimizado
+	conns.fpsWs = workspace.DescendantAdded:Connect(fpsHandle)
+	conns.fpsLt = Lighting.DescendantAdded:Connect(fpsHandle)
+
+	-- o que já existe é otimizado em lotes, sem congelar o jogo
+	task.spawn(function()
+		local n = 0
+		for _, root in ipairs({ workspace, Lighting }) do
+			for _, inst in ipairs(root:GetDescendants()) do
+				if fpsToken ~= token then return end
+				fpsHandle(inst)
+				n += 1
+				if n % 300 == 0 then task.wait() end
+			end
+		end
+	end)
+end
+
+-- ===== REJOIN / SERVER HOP =====
+local netBusy = false
+
+-- volta para o mesmo servidor
+local function rejoinServer()
+	if #Players:GetPlayers() <= 1 then
+		-- sozinho: o servidor fecha quando você sai, então entra em um novo
+		player:Kick("\nReentrando no jogo...")
+		task.wait()
+		TeleportService:Teleport(game.PlaceId, player)
+		return true
+	end
+	return (pcall(function()
+		TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, player)
+	end))
+end
+
+-- faz a requisição HTTP (usa o que o executor oferecer)
+local function httpGetBody(url)
+	local reqFn = request or http_request or (syn and syn.request)
+	if reqFn then
+		local ok, res = pcall(reqFn, { Url = url, Method = "GET" })
+		if ok and res and res.Body then return res.Body end
+	end
+	local ok, body = pcall(function() return game:HttpGet(url) end)
+	if ok then return body end
+	return nil
+end
+
+-- procura um servidor público diferente do atual e com vaga
+local function findOtherServer()
+	local candidates = {}
+	local cursor = nil
+	for _ = 1, 3 do -- até 3 páginas de 100 servidores
+		local url = "https://games.roblox.com/v1/games/" .. game.PlaceId
+			.. "/servers/Public?sortOrder=Asc&excludeFullGames=true&limit=100"
+		if cursor then url = url .. "&cursor=" .. cursor end
+
+		local body = httpGetBody(url)
+		if not body then break end
+		local ok, data = pcall(function() return HttpService:JSONDecode(body) end)
+		if not ok or type(data) ~= "table" or type(data.data) ~= "table" then break end
+
+		for _, s in ipairs(data.data) do
+			if s.id ~= game.JobId and s.playing and s.maxPlayers and s.playing < s.maxPlayers - 1 then
+				table.insert(candidates, s.id)
+			end
+		end
+
+		if type(data.nextPageCursor) ~= "string" then break end
+		cursor = data.nextPageCursor
+	end
+	if #candidates == 0 then return nil end
+	return candidates[math.random(#candidates)]
+end
+
+-- entra em outro servidor; devolve true se o teleporte foi iniciado, ou false e o motivo
+local function serverHop()
+	local id = findOtherServer()
+	if not id then return false, "Sem servidor" end
+	local ok = pcall(function()
+		TeleportService:TeleportToPlaceInstance(game.PlaceId, id, player)
+	end)
+	if not ok then return false, "Falhou" end
+	return true
+end
+
 -- ===== LISTA DE BOTÕES =====
 local options = {
 	{ name = "AntiFling", fn = antiFling },
@@ -320,6 +487,7 @@ local options = {
 	{ name = "VFly",      fn = vfly },
 	{ name = "Fly",       fn = fly },
 	{ name = "Float",     fn = floatToggle },
+	{ name = "FPS",       fn = fpsBoost },
 }
 
 -- ===== QUAL VERSÃO RODA: DARK PARA TODOS, ROMÂNTICA SÓ PARA OS USUÁRIOS DA LISTA =====
@@ -363,6 +531,8 @@ local THEMES = {
 		baseTp = Color3.fromRGB(30, 38, 66),
 		faceHelp = Color3.fromRGB(76, 62, 116),
 		baseHelp = Color3.fromRGB(40, 32, 64),
+		faceNet = Color3.fromRGB(44, 100, 108),
+		baseNet = Color3.fromRGB(22, 50, 56),
 		bubbleBg = Color3.fromRGB(18, 18, 22),
 		bubbleBgOpen = Color3.fromRGB(44, 44, 52),
 	},
@@ -381,6 +551,8 @@ local THEMES = {
 		baseTp = Color3.fromRGB(122, 28, 70),
 		faceHelp = Color3.fromRGB(172, 52, 132),
 		baseHelp = Color3.fromRGB(104, 28, 82),
+		faceNet = Color3.fromRGB(214, 72, 98),
+		baseNet = Color3.fromRGB(130, 34, 56),
 	},
 }
 local T = IS_ROMANTIC and THEMES.romantic or THEMES.dark
@@ -737,7 +909,9 @@ local ROW_RE = #options + 2
 local ROW_SELECT = #options + 3
 local ROW_TP = #options + 4
 local ROW_HELP = #options + 5
-local CONTENT_H = rowY(ROW_HELP) + ROW_H + 6 -- altura total do conteúdo rolável
+local ROW_REJOIN = #options + 6
+local ROW_HOP = #options + 7
+local CONTENT_H = rowY(ROW_HOP) + ROW_H + 6 -- altura total do conteúdo rolável
 
 local panel = Instance.new("Frame")
 panel.Size = UDim2.fromOffset(PANEL_W, PANEL_H)
@@ -834,6 +1008,12 @@ tpBtn.face.TextTruncate = Enum.TextTruncate.AtEnd
 local helpBtn = new3DButton(content, "tp ajuda", UDim2.fromOffset(8, rowY(ROW_HELP)),
 	UDim2.new(1, -16, 0, ROW_H), T.faceHelp, T.baseHelp)
 helpBtn.face.TextTruncate = Enum.TextTruncate.AtEnd
+
+local rejoinBtn = new3DButton(content, "Rejoin", UDim2.fromOffset(8, rowY(ROW_REJOIN)),
+	UDim2.new(1, -16, 0, ROW_H), T.faceNet, T.baseNet)
+
+local hopBtn = new3DButton(content, "Server hop", UDim2.fromOffset(8, rowY(ROW_HOP)),
+	UDim2.new(1, -16, 0, ROW_H), T.faceNet, T.baseNet)
 
 -- texto do botão de teleporte (muda para os usuários da lista, pelo nome de usuário)
 local function updateTpText()
@@ -950,7 +1130,7 @@ end)
 refreshList()
 
 -- ===== TP AJUDA (deitado) =====
--- trip (deitado) > "fly" de segurar no ar > noclip > TP exatamente abaixo do jogador
+-- trip (deitado) > "fly" que segura no ar > noclip > TP exatamente abaixo do jogador
 -- (pés dele no meio do meu tronco) > sobe 10 studs aos poucos > noclip desliga
 -- > fico deitado na plataforma do float até eu pular.
 local RISE_STUDS = 10    -- quanto sobe no final
@@ -1044,12 +1224,10 @@ local function runTpHelp()
 
 	-- 7) continuo deitado até eu pular
 	conns.helpJump = UIS.JumpRequest:Connect(function()
-		local r, h = myRoot(), player.Character and player.Character:FindFirstChildOfClass("Humanoid")
-		if h ~= hum or not h.PlatformStand or not r then
-			if conns.helpJump then conns.helpJump:Disconnect() conns.helpJump = nil end
-			return
-		end
+		local r = myRoot()
+		local h = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
 		if conns.helpJump then conns.helpJump:Disconnect() conns.helpJump = nil end
+		if h ~= hum or not h.PlatformStand or not r then return end
 		r.CFrame = CFrame.new(r.Position + Vector3.new(0, 2.5, 0)) * CFrame.Angles(0, yaw, 0)
 		h.PlatformStand = false
 		h:ChangeState(Enum.HumanoidStateType.GettingUp)
@@ -1060,6 +1238,36 @@ local function runTpHelp()
 end
 
 helpBtn.face.Activated:Connect(runTpHelp)
+
+-- ===== REJOIN / SERVER HOP (botões) =====
+rejoinBtn.face.Activated:Connect(function()
+	if netBusy then return end
+	netBusy = true
+	rejoinBtn.face.Text = "Reentrando..."
+	rejoinBtn.setOn(true)
+	local ok = rejoinServer()
+	if not ok then rejoinBtn.face.Text = "Falhou" end
+	-- se o teleporte demorar ou falhar, o botão volta ao normal
+	task.delay(ok and 10 or 1.5, function()
+		rejoinBtn.face.Text = "Rejoin"
+		rejoinBtn.setOn(false)
+		netBusy = false
+	end)
+end)
+
+hopBtn.face.Activated:Connect(function()
+	if netBusy then return end
+	netBusy = true
+	hopBtn.face.Text = "Procurando..."
+	hopBtn.setOn(true)
+	local ok, reason = serverHop()
+	if not ok then hopBtn.face.Text = reason or "Falhou" end
+	task.delay(ok and 10 or 1.5, function()
+		hopBtn.face.Text = "Server hop"
+		hopBtn.setOn(false)
+		netBusy = false
+	end)
+end)
 
 -- ===== ABRIR / FECHAR O PAINEL (com animação) =====
 local panelOpen = false
