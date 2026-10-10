@@ -195,7 +195,7 @@ local function vfly(on)
 end
 
 -- ===== FLOAT (plataforma invisível sob os pés; Q desce / E sobe) =====
-local FLOAT_SPEED = 20
+local FLOAT_SPEED = 8 -- velocidade de subir/descer (studs por segundo)
 local floatPart, floatY
 local floatUp, floatDown = false, false
 
@@ -498,6 +498,7 @@ local SCRIPT_URL = "https://raw.githubusercontent.com/7PJBX/Zahid_painel/refs/he
 local USE_QUEUE = true                    -- false se o script já roda sozinho pela pasta autoexec
 local TELEPORT_JUMP = 15                  -- deslocamento em 1 frame (studs) que conta como teleporte
 local USE_INTERVAL = 5                    -- segundos entre cada uso da ferramenta
+local FARM_ANTIFLING_ON_RELOG = true   -- depois de relogar (queda de internet), já deixa o AntiFling ligado
 
 local farmOn = false
 local farmCFrame = nil       -- posição definida
@@ -699,8 +700,8 @@ local options = {
 	{ name = "TPTool",    fn = tpTool },
 	{ name = "VFly",      fn = vfly },
 	{ name = "Fly",       fn = fly },
-	{ name = "Float",     fn = floatToggle },
 	{ name = "FPS",       fn = fpsBoost },
+	{ name = "Float",     fn = floatToggle },
 }
 
 -- ===== QUAL VERSÃO RODA: DARK PARA TODOS, ROMÂNTICA SÓ PARA OS USUÁRIOS DA LISTA =====
@@ -770,12 +771,15 @@ local THEMES = {
 }
 local T = IS_ROMANTIC and THEMES.romantic or THEMES.dark
 
+local gradients = {} -- guarda os degradês, para trocar as cores quando o coração vira preto
+
 local function addGradient(obj)
 	obj.BackgroundColor3 = Color3.new(1, 1, 1)
 	local g = Instance.new("UIGradient")
 	g.Color = ColorSequence.new(T.panelTop, T.panelBottom)
 	g.Rotation = 90
 	g.Parent = obj
+	table.insert(gradients, g)
 end
 
 -- ===== ANIMAÇÃO: FUNÇÕES AUXILIARES =====
@@ -807,6 +811,16 @@ UIS.InputEnded:Connect(function(input)
 		tween(face, 0.14, { Position = UDim2.fromOffset(0, 0) }, Enum.EasingStyle.Back)
 	end
 end)
+
+local themed3D = {} -- todos os botões 3D, para trocar o tema depois
+
+-- descobre o "papel" da cor do botão (Off, Tp, Help, Net) no tema atual
+local function roleOf(faceColor)
+	for _, role in ipairs({ "Off", "Tp", "Help", "Net" }) do
+		if T["face" .. role] == faceColor then return role end
+	end
+	return "Off"
+end
 
 local function new3DButton(parent, text, position, size, faceColor, baseColor)
 	local holder = Instance.new("Frame")
@@ -848,15 +862,24 @@ local function new3DButton(parent, text, position, size, faceColor, baseColor)
 		end
 	end)
 
-	local obj = { holder = holder, base = base, face = face }
+	local obj = { holder = holder, base = base, face = face, role = roleOf(faceColor), isOn = false }
+
+	-- limpa da lista os botões que já foram destruídos (itens antigos da lista de jogadores)
+	if #themed3D > 120 then
+		for n = #themed3D, 1, -1 do
+			if not themed3D[n].holder.Parent then table.remove(themed3D, n) end
+		end
+	end
+	table.insert(themed3D, obj)
 
 	-- liga/desliga: muda a cor da face e do corpo
 	function obj.setOn(on)
+		obj.isOn = on
 		tween(face, 0.2, {
-			BackgroundColor3 = on and T.faceOn or T.faceOff,
+			BackgroundColor3 = on and T.faceOn or T["face" .. obj.role],
 			TextColor3 = on and T.textOn or T.text,
 		})
-		tween(base, 0.2, { BackgroundColor3 = on and T.baseOn or T.baseOff })
+		tween(base, 0.2, { BackgroundColor3 = on and T.baseOn or T["base" .. obj.role] })
 	end
 
 	-- aparece aos poucos (usado nos itens da lista de jogadores)
@@ -1196,11 +1219,11 @@ local function makeHoldButton(text, x, setter)
 	end)
 end
 
-makeHoldButton("Q (descer)", 8, function(v) floatDown = v end)
-makeHoldButton("E (subir)", 8 + halfW + 8, function(v) floatUp = v end)
+makeHoldButton("descer", 8, function(v) floatDown = v end)
+makeHoldButton("subir", 8 + halfW + 8, function(v) floatUp = v end)
 
 -- RE: regenera o personagem e volta para o mesmo lugar
-local reBtn = new3DButton(content, "Re", UDim2.fromOffset(8, rowY(ROW_RE)),
+local reBtn = new3DButton(content, "resetar", UDim2.fromOffset(8, rowY(ROW_RE)),
 	UDim2.new(1, -16, 0, ROW_H), T.faceOff, T.baseOff)
 reBtn.face.Activated:Connect(function()
 	reBtn.setOn(true)
@@ -1529,6 +1552,10 @@ task.spawn(function()
 		if not game:IsLoaded() then game.Loaded:Wait() end
 		farmEnable(true)
 		farmBtn.setOn(farmOn)
+		-- depois de relogar, já deixa o AntiFling ligado (e o botão aceso)
+		if FARM_ANTIFLING_ON_RELOG then
+			toggles.AntiFling(true)
+		end
 	end
 end)
 
@@ -1552,12 +1579,184 @@ local function setPanel(open)
 	end
 end
 
+-- ===== TROCA PARA A VERSÃO DARK (o coração vermelho vira preto) =====
+local HOLD_TIME = 1 -- segundos segurando o coração
+local themeSwitching = false
+
+local function applyDarkTheme()
+	T = THEMES.dark
+	IS_ROMANTIC = false
+
+	-- botões 3D: trocam para as cores equivalentes do tema dark (mantendo ligado/desligado)
+	for _, obj in ipairs(themed3D) do
+		if obj.holder.Parent then
+			obj.face.Font = T.font
+			tween(obj.face, 0.35, {
+				BackgroundColor3 = obj.isOn and T.faceOn or T["face" .. obj.role],
+				TextColor3 = obj.isOn and T.textOn or T.text,
+			})
+			tween(obj.base, 0.35, { BackgroundColor3 = obj.isOn and T.baseOn or T["base" .. obj.role] })
+		end
+	end
+
+	-- degradê do painel e da lista, e barras de rolagem
+	for _, g in ipairs(gradients) do
+		if g.Parent then
+			g.Color = ColorSequence.new(T.panelTop, T.panelBottom)
+		end
+	end
+	content.ScrollBarImageColor3 = T.scroll
+	list.ScrollBarImageColor3 = T.scroll
+
+	-- o coração vira o retângulo "Zahid painel" em fonte emo
+	BUBBLE_H = 34
+	bubble.Size = UDim2.fromOffset(120, 34)
+	bubble.Text = "Zahid painel"
+	bubble.Font = EMO_FONT
+	bubble.TextColor3 = T.text
+	bubble.BackgroundColor3 = T.bubbleBg
+	bubble.BackgroundTransparency = 0
+	Instance.new("UICorner", bubble).CornerRadius = UDim.new(0, 10)
+	local bubbleLimit = Instance.new("UITextSizeConstraint")
+	bubbleLimit.MaxTextSize = 20
+	bubbleLimit.Parent = bubble
+	panel.Position = UDim2.fromOffset(0, BUBBLE_H + 8)
+end
+
+-- animação (1,6 s): o coração treme e a tela escurece > racha (💔) com um anel de luz e
+-- estilhaços > renasce preto (🖤) > vira a versão dark
+local function playHeartToBlack(onSwitch)
+	-- fecha o menu, se estiver aberto
+	if panelOpen then setPanel(false) end
+
+	-- centro do coração (mesmo espaço de coordenadas da interface do menu)
+	local cx = bubble.Position.X.Offset + 24
+	local cy = bubble.Position.Y.Offset + 24
+
+	-- a tela escurece atrás do menu
+	local fx = Instance.new("ScreenGui")
+	fx.Name = "HeartSwitchFx"
+	fx.IgnoreGuiInset = true
+	fx.ResetOnSpawn = false
+	fx.DisplayOrder = -1
+	fx.Parent = player:WaitForChild("PlayerGui")
+
+	local shade = Instance.new("Frame")
+	shade.Size = UDim2.fromScale(1, 1)
+	shade.BackgroundColor3 = Color3.new(0, 0, 0)
+	shade.BackgroundTransparency = 1
+	shade.BorderSizePixel = 0
+	shade.Parent = fx
+
+	local function newEmoji(emoji, size)
+		local l = Instance.new("TextLabel")
+		l.BackgroundTransparency = 1
+		l.Text = emoji
+		l.Font = Enum.Font.GothamMedium
+		l.TextSize = size
+		l.Size = UDim2.fromOffset(size + 10, size + 10)
+		l.AnchorPoint = Vector2.new(0.5, 0.5)
+		l.Position = UDim2.fromOffset(cx, cy)
+		l.ZIndex = 5
+		l.Parent = gui
+		return l
+	end
+
+	-- estilhaços: pequenos emojis que saem do coração, giram e somem
+	local function burst(emoji, count, minDist, maxDist, size, time)
+		for _ = 1, count do
+			local l = newEmoji(emoji, size)
+			local a = math.random() * math.pi * 2
+			local d = math.random(minDist, maxDist)
+			l.Rotation = math.random(-40, 40)
+			tween(l, time, {
+				Position = UDim2.fromOffset(cx + math.cos(a) * d, cy + math.sin(a) * d),
+				Rotation = l.Rotation + math.random(-260, 260),
+			}, Enum.EasingStyle.Quint)
+			task.delay(time * 0.4, function()
+				tween(l, time * 0.6, { TextTransparency = 1 }, Enum.EasingStyle.Linear)
+			end)
+			task.delay(time + 0.05, function() l:Destroy() end)
+		end
+	end
+
+	-- anel de luz que se expande
+	local function ring()
+		local r = Instance.new("Frame")
+		r.AnchorPoint = Vector2.new(0.5, 0.5)
+		r.Position = UDim2.fromOffset(cx, cy)
+		r.Size = UDim2.fromOffset(10, 10)
+		r.BackgroundTransparency = 1
+		r.ZIndex = 4
+		r.Parent = gui
+		Instance.new("UICorner", r).CornerRadius = UDim.new(1, 0)
+		local s = Instance.new("UIStroke")
+		s.Color = Color3.fromRGB(255, 255, 255)
+		s.Thickness = 3
+		s.Parent = r
+		tween(r, 0.45, { Size = UDim2.fromOffset(260, 260) }, Enum.EasingStyle.Quint)
+		tween(s, 0.45, { Transparency = 1 })
+		task.delay(0.5, function() r:Destroy() end)
+	end
+
+	-- 1) o coração bate rápido e treme cada vez mais, enquanto a tela escurece (0,55 s)
+	local SHAKE = 0.55
+	tween(bubbleScale, SHAKE, { Scale = 1.4 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+	tween(shade, SHAKE, { BackgroundTransparency = 0.65 })
+	local t0 = os.clock()
+	while os.clock() - t0 < SHAKE do
+		local k = (os.clock() - t0) / SHAKE
+		local amp = 1 + k * 8
+		bubble.Rotation = (math.random() * 2 - 1) * amp
+		RunService.RenderStepped:Wait()
+	end
+	bubble.Rotation = 0
+
+	-- 2) racha: vira 💔, com um anel de luz e estilhaços vermelhos (0,3 s)
+	bubble.Text = "💔"
+	ring()
+	burst("❤️", 10, 60, 140, 22, 0.7)
+	tween(bubbleScale, 0.12, { Scale = 0.85 })
+	task.wait(0.3)
+
+	-- 3) renasce preto: o 🖤 aparece com um pop (0,35 s)
+	bubble.Text = "🖤"
+	bubbleScale.Scale = 0.5
+	tween(bubbleScale, 0.35, { Scale = 1.15 }, Enum.EasingStyle.Back)
+	tween(shade, 0.25, { BackgroundTransparency = 0.4 })
+	burst("🖤", 6, 50, 110, 20, 0.6)
+	task.wait(0.35)
+
+	-- 4) vira a versão dark: o coração vira o retângulo "Zahid painel" (0,4 s)
+	onSwitch()
+	bubbleScale.Scale = 0.6
+	tween(bubbleScale, 0.35, { Scale = 1 }, Enum.EasingStyle.Back)
+	tween(shade, 0.4, { BackgroundTransparency = 1 })
+	task.wait(0.4)
+	fx:Destroy()
+end
+
 -- ===== ARRASTAR O BOTÃO / CLICAR ABRE O MENU =====
 local dragging, startPos, startInput, moved
+local holdToken = 0
 bubble.InputBegan:Connect(function(input)
 	if isPress(input) then
 		dragging, moved = true, false
 		startPos, startInput = bubble.Position, input.Position
+
+		-- segurar o coração vermelho por 1 segundo: ele vira preto e abre a versão dark
+		holdToken += 1
+		local token = holdToken
+		if IS_ROMANTIC then
+			task.delay(HOLD_TIME, function()
+				if token == holdToken and dragging and not moved and IS_ROMANTIC and not themeSwitching then
+					dragging = false -- ao soltar, não abre nem fecha o menu
+					themeSwitching = true
+					playHeartToBlack(applyDarkTheme)
+					themeSwitching = false
+				end
+			end)
+		end
 	end
 end)
 UIS.InputChanged:Connect(function(input)
