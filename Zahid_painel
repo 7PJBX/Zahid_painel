@@ -195,7 +195,7 @@ local function vfly(on)
 end
 
 -- ===== FLOAT (plataforma invisível sob os pés; Q desce / E sobe) =====
-local FLOAT_SPEED = 8 -- velocidade de subir/descer (studs por segundo)
+local FLOAT_SPEED = 4 -- velocidade de subir/descer (studs por segundo; o TP ajuda usa a mesma)
 local floatPart, floatY
 local floatUp, floatDown = false, false
 
@@ -1566,10 +1566,14 @@ refreshList()
 -- trip (deitado) > "fly" que segura no ar > noclip > TP exatamente abaixo do jogador
 -- (pés dele no meio do meu tronco) > sobe 10 studs aos poucos > noclip desliga
 -- > fico deitado na plataforma do float até eu pular.
-local RISE_STUDS = 10    -- quanto sobe no final
-local RISE_SPEED = 4     -- studs por segundo (subida gradual)
-local LIE_OFFSET = 3.5   -- do centro dele até o meu centro deitado (aumente se ele afundar, diminua se ficar alto)
+-- Depois do trip eu só me movo na vertical: nada nem ninguém me move para os lados.
+-- (o subir/descer é o do Float, na mesma velocidade da subida gradual do TP ajuda)
+local RISE_STUDS = 10          -- quanto sobe no final
+local RISE_SPEED = FLOAT_SPEED -- studs por segundo (mesma do subir/descer do Float)
+local LIE_OFFSET = 3.5         -- do centro dele até o meu centro deitado (aumente se ele afundar, diminua se ficar alto)
 local helpBusy = false
+local helpLock = nil           -- { conn, bv, bg } enquanto estou deitado e travado na vertical
+local helpApfPending = false   -- o Anti Part Fling estava ligado e volta quando eu levantar
 
 local function targetRoot()
 	local ch = selectedPlayer and selectedPlayer.Character
@@ -1578,6 +1582,24 @@ end
 
 local function myRoot()
 	return player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+end
+
+-- solta a trava vertical (heartbeat de travamento, BodyVelocity e BodyGyro)
+local function releaseHelpLock()
+	if helpLock then
+		if helpLock.conn then helpLock.conn:Disconnect() end
+		if helpLock.bv then helpLock.bv:Destroy() end
+		if helpLock.bg then helpLock.bg:Destroy() end
+		helpLock = nil
+	end
+end
+
+-- religa o Anti Part Fling (se ele estava ligado antes do TP ajuda)
+local function resumeApfAfterHelp()
+	if helpApfPending then
+		helpApfPending = false
+		toggles["Anti Part Fling"](true)
+	end
 end
 
 local function runTpHelp()
@@ -1597,9 +1619,13 @@ local function runTpHelp()
 
 	helpBusy = true
 	helpBtn.face.Text = "Ajudando..."
-	-- o Anti Part Fling atrapalharia o TP (vai por baixo do chão): pausa e religa no fim
-	local apfWasOn = apfActive
-	if apfWasOn then toggles["Anti Part Fling"](false) end
+	releaseHelpLock() -- caso eu ainda esteja deitado e travado de um TP anterior
+	-- o Anti Part Fling derrubaria meu corpo deitado da plataforma (ele tira a colisão):
+	-- pausa agora e religa quando eu levantar
+	if apfActive then
+		helpApfPending = true
+		toggles["Anti Part Fling"](false)
+	end
 	if conns.helpJump then conns.helpJump:Disconnect() conns.helpJump = nil end
 
 	-- deitado de barriga para cima, mantendo para onde eu estava olhando
@@ -1607,8 +1633,9 @@ local function runTpHelp()
 	local yaw = math.atan2(-look.X, -look.Z)
 	local lieRot = CFrame.Angles(0, yaw, 0) * CFrame.Angles(math.rad(90), 0, 0)
 
-	local bv, bg
-	pcall(function()
+	local bv, bg, lockConn
+	local lockX, lockZ = mine.Position.X, mine.Position.Z
+	local ok = pcall(function()
 		-- 1) trip: fica deitado
 		hum.PlatformStand = true
 
@@ -1622,14 +1649,35 @@ local function runTpHelp()
 		bg.P = 9e4
 		bg.CFrame = lieRot
 		bg.Parent = mine
+		helpLock = { bv = bv, bg = bg }
+
+		-- trava: a partir do trip só me movo na vertical (X e Z fixos; o giro fica por conta do BodyGyro)
+		lockConn = RunService.Heartbeat:Connect(function()
+			local r = myRoot()
+			if not r or player.Character ~= char then -- morri ou troquei de personagem
+				releaseHelpLock()
+				resumeApfAfterHelp()
+				return
+			end
+			local pos = r.Position
+			if math.abs(pos.X - lockX) > 0.02 or math.abs(pos.Z - lockZ) > 0.02 then
+				r.CFrame = CFrame.new(lockX, pos.Y, lockZ) * r.CFrame.Rotation
+			end
+			local v = r.AssemblyLinearVelocity
+			if v.X ~= 0 or v.Z ~= 0 then
+				r.AssemblyLinearVelocity = Vector3.new(0, v.Y, 0)
+			end
+		end)
+		helpLock.conn = lockConn
 		task.wait(0.3) -- tempo de deitar
 
 		-- 3) noclip
 		noclip(true)
 
-		-- 4) TP exatamente abaixo: pés dele no meio do meu tronco
+		-- 4) TP exatamente abaixo: pés dele no meio do meu tronco (a trava passa a valer neste ponto)
 		local theirs = targetRoot()
 		local p = theirs.Position
+		lockX, lockZ = p.X, p.Z
 		mine.CFrame = CFrame.new(p.X, p.Y - LIE_OFFSET, p.Z) * lieRot
 		mine.AssemblyLinearVelocity = Vector3.zero
 		mine.AssemblyAngularVelocity = Vector3.zero
@@ -1652,24 +1700,33 @@ local function runTpHelp()
 		task.wait(0.1)
 	end)
 
-	-- 6) desliga o noclip (sempre, mesmo se algo falhou) e solta o "fly"
+	-- 6) desliga o noclip (sempre, mesmo se algo falhou)
 	noclip(false)
 	task.wait(0.1)
-	if bv then bv:Destroy() end
-	if bg then bg:Destroy() end
+	if ok and bv and bv.Parent then
+		-- libera só a vertical (a plataforma do float me segura); X e Z continuam travados
+		bv.MaxForce = Vector3.new(9e9, 0, 9e9)
+		bv.Velocity = Vector3.zero
+	else
+		-- algo falhou: solta tudo
+		releaseHelpLock()
+		resumeApfAfterHelp()
+	end
 
-	-- 7) continuo deitado até eu pular
+	-- 7) continuo deitado e travado na vertical até eu pular
 	conns.helpJump = UIS.JumpRequest:Connect(function()
 		local r = myRoot()
 		local h = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
 		if conns.helpJump then conns.helpJump:Disconnect() conns.helpJump = nil end
-		if h ~= hum or not h.PlatformStand or not r then return end
-		r.CFrame = CFrame.new(r.Position + Vector3.new(0, 2.5, 0)) * CFrame.Angles(0, yaw, 0)
-		h.PlatformStand = false
-		h:ChangeState(Enum.HumanoidStateType.GettingUp)
+		releaseHelpLock() -- solta a trava vertical
+		if h == hum and h.PlatformStand and r then
+			r.CFrame = CFrame.new(r.Position + Vector3.new(0, 2.5, 0)) * CFrame.Angles(0, yaw, 0)
+			h.PlatformStand = false
+			h:ChangeState(Enum.HumanoidStateType.GettingUp)
+		end
+		resumeApfAfterHelp()
 	end)
 
-	if apfWasOn then toggles["Anti Part Fling"](true) end
 	helpBusy = false
 	helpBtn.face.Text = "tp ajuda"
 end
