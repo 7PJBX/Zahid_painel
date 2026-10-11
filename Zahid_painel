@@ -694,9 +694,196 @@ local function farmEnable(on)
 	end)
 end
 
+-- ===== ANTI PART FLING =====
+-- Enquanto ligado:
+--  * corpo denso (peso alto) em todas as partes;
+--  * noclip em TODAS as partes do corpo, inclusive pés: nada encosta em você, então
+--    nenhuma parte voando consegue empurrar o seu personagem;
+--  * plataforma invisível sob os pés, no nível do chão (segue o terreno), para o personagem ficar em pé;
+--  * parado: o corpo só se move na vertical (qualquer empurrão horizontal é desfeito);
+--  * limite de altura acima do chão (o "teto"): ninguém te lança para cima;
+--  * trava velocidades absurdas e desliga os estados de queda/ragdoll.
+-- Obs.: o Roblox não deixa o client criar grupos de colisão (só o servidor), então não dá para os pés
+-- colidirem "só com a plataforma". O personagem fica em pé porque o Humanoid detecta o chão (e a
+-- plataforma) por raycast, mesmo com todas as partes sem colisão.
+local apfActive = false
+local antiPartFling
+do
+	local CEILING_HEIGHT = 14   -- altura máxima acima do chão (um pulo normal sobe ~7 studs)
+	local IDLE_PUSH_SPEED = 1.5 -- parado: velocidade horizontal acima disso conta como empurrão
+	local MAX_SPEED = 150       -- velocidade linear máxima
+	local MAX_SPIN = 50         -- rotação máxima
+	local DENSE = PhysicalProperties.new(100, 0.5, 0, 1, 1)
+	local BLOCKED_STATES = {
+		Enum.HumanoidStateType.Ragdoll,
+		Enum.HumanoidStateType.FallingDown,
+		Enum.HumanoidStateType.Physics,
+	}
+
+	local saved = {}   -- [parte] = { cc = CanCollide original, pp = propriedades físicas originais }
+	local plat         -- plataforma invisível sob os pés
+	local anchor       -- posição (X, Z) em que fiquei parado
+	local lastBaseY    -- último nível de chão encontrado
+	local supportY     -- último nível em que estive apoiado (base do "teto")
+	local stateHum     -- humanoid que está com estados bloqueados
+
+	local rayParams = RaycastParams.new()
+	rayParams.FilterType = Enum.RaycastFilterType.Exclude
+	rayParams.RespectCanCollide = true
+
+	local function restoreAll()
+		for part, s in pairs(saved) do
+			if part.Parent then
+				part.CanCollide = s.cc
+				part.CustomPhysicalProperties = s.pp or nil
+			end
+			saved[part] = nil
+		end
+		local char = player.Character
+		if char then
+			for _, part in ipairs(char:GetDescendants()) do
+				if part:IsA("BasePart") and CORE_PARTS[part.Name] then
+					part.CanCollide = true
+				end
+			end
+		end
+		if stateHum then
+			for _, st in ipairs(BLOCKED_STATES) do
+				pcall(stateHum.SetStateEnabled, stateHum, st, true)
+			end
+			stateHum = nil
+		end
+		if plat then plat:Destroy() plat = nil end
+		anchor, lastBaseY, supportY = nil, nil, nil
+	end
+
+	antiPartFling = function(on)
+		for _, k in ipairs({ "apfStep", "apfBeat" }) do
+			if conns[k] then conns[k]:Disconnect() conns[k] = nil end
+		end
+		apfActive = on
+		restoreAll()
+		if not on then return end
+
+		-- plataforma invisível sob os pés (igual ao float)
+		plat = Instance.new("Part")
+		plat.Name = "AntiPartFlingPlatform"
+		plat.Size = Vector3.new(6, 1, 6)
+		plat.Anchored = true
+		plat.CanCollide = true
+		plat.CanQuery = false
+		plat.CanTouch = false
+		plat.Transparency = 1
+		plat.Parent = workspace
+
+		-- antes da física: corpo denso e sem colisão em todas as partes (pés incluídos)
+		conns.apfStep = RunService.Stepped:Connect(function()
+			local char = player.Character
+			if not char then return end
+			for _, part in ipairs(char:GetDescendants()) do
+				if part:IsA("BasePart") then
+					if not saved[part] then
+						saved[part] = { cc = part.CanCollide, pp = part.CustomPhysicalProperties or false }
+						part.CustomPhysicalProperties = DENSE
+					end
+					part.CanCollide = false
+				end
+			end
+		end)
+
+		-- depois da física: plataforma, trava horizontal, teto e limites de velocidade
+		conns.apfBeat = RunService.Heartbeat:Connect(function()
+			local char = player.Character
+			local hrp = char and char:FindFirstChild("HumanoidRootPart")
+			local hum = char and char:FindFirstChildOfClass("Humanoid")
+			if not hrp or not hum or not plat then return end
+
+			if hum ~= stateHum then -- personagem novo (ou primeiro): bloqueia queda/ragdoll
+				stateHum = hum
+				anchor, lastBaseY, supportY = nil, nil, nil
+				for _, st in ipairs(BLOCKED_STATES) do
+					pcall(hum.SetStateEnabled, hum, st, false)
+				end
+			end
+
+			local pos = hrp.Position
+			local standH = (hum.RigType == Enum.HumanoidRigType.R15) and (hum.HipHeight + hrp.Size.Y / 2) or 3
+			local flying = flyState.fly ~= nil or flyState.vfly ~= nil or hum.SeatPart ~= nil
+
+			-- nível do chão sob mim (se o Float está ligado, é o topo dele)
+			local baseY
+			if floatPart and floatY then
+				baseY = floatY + 0.5
+			else
+				local filter = { plat }
+				for _, p in ipairs(Players:GetPlayers()) do
+					if p.Character then filter[#filter + 1] = p.Character end
+				end
+				rayParams.FilterDescendantsInstances = filter
+				local hit = workspace:Raycast(pos, Vector3.new(0, -500, 0), rayParams)
+				if hit then baseY = hit.Position.Y end
+			end
+			if baseY then lastBaseY = baseY end
+			baseY = lastBaseY or (pos.Y - standH)
+			lastBaseY = baseY
+			plat.CFrame = CFrame.new(pos.X, baseY - 0.5, pos.Z)
+
+			-- base do teto: último lugar em que estive apoiado (ou subindo escada)
+			if hum.FloorMaterial ~= Enum.Material.Air or hum:GetState() == Enum.HumanoidStateType.Climbing then
+				supportY = pos.Y - standH
+			end
+			supportY = supportY or (pos.Y - standH)
+
+			if not flying then
+				-- atravessou o chão? volta para cima da plataforma
+				if pos.Y < baseY - 0.5 then
+					hrp.CFrame = CFrame.new(pos.X, baseY + standH, pos.Z) * hrp.CFrame.Rotation
+					hrp.AssemblyLinearVelocity = Vector3.zero
+					pos = hrp.Position
+				end
+
+				local v = hrp.AssemblyLinearVelocity
+
+				-- teto: não deixa subir além do limite (só corta a velocidade para cima)
+				if v.Y > 0 and pos.Y > supportY + CEILING_HEIGHT then
+					hrp.AssemblyLinearVelocity = Vector3.new(v.X, 0, v.Z)
+					v = hrp.AssemblyLinearVelocity
+				end
+
+				-- parado: só se move na vertical
+				if hum.MoveDirection.Magnitude > 0.05 then
+					anchor = nil
+				else
+					local hv = Vector3.new(v.X, 0, v.Z).Magnitude
+					if anchor and hv > IDLE_PUSH_SPEED then
+						-- empurrão: volta ao ponto onde eu estava e zera o movimento horizontal
+						hrp.CFrame = CFrame.new(anchor.X, pos.Y, anchor.Z) * hrp.CFrame.Rotation
+						hrp.AssemblyLinearVelocity = Vector3.new(0, v.Y, 0)
+						hrp.AssemblyAngularVelocity = Vector3.zero
+					else
+						-- (teleportes feitos por mim são aceitos: o ponto fixo passa a ser o novo lugar)
+						anchor = Vector3.new(pos.X, 0, pos.Z)
+						if hv > 0 then hrp.AssemblyLinearVelocity = Vector3.new(0, v.Y, 0) end
+					end
+				end
+
+				-- velocidade ou giro absurdos: zera
+				if hrp.AssemblyLinearVelocity.Magnitude > MAX_SPEED
+					or hrp.AssemblyAngularVelocity.Magnitude > MAX_SPIN then
+					hrp.AssemblyLinearVelocity = Vector3.zero
+					hrp.AssemblyAngularVelocity = Vector3.zero
+				end
+			else
+				anchor = nil
+			end
+		end)
+	end
+end
+
 -- ===== LISTA DE BOTÕES =====
 local options = {
 	{ name = "AntiFling", fn = antiFling },
+	{ name = "Anti Part Fling", fn = antiPartFling },
 	{ name = "TPTool",    fn = tpTool },
 	{ name = "VFly",      fn = vfly },
 	{ name = "Fly",       fn = fly },
@@ -1410,6 +1597,9 @@ local function runTpHelp()
 
 	helpBusy = true
 	helpBtn.face.Text = "Ajudando..."
+	-- o Anti Part Fling atrapalharia o TP (vai por baixo do chão): pausa e religa no fim
+	local apfWasOn = apfActive
+	if apfWasOn then toggles["Anti Part Fling"](false) end
 	if conns.helpJump then conns.helpJump:Disconnect() conns.helpJump = nil end
 
 	-- deitado de barriga para cima, mantendo para onde eu estava olhando
@@ -1479,6 +1669,7 @@ local function runTpHelp()
 		h:ChangeState(Enum.HumanoidStateType.GettingUp)
 	end)
 
+	if apfWasOn then toggles["Anti Part Fling"](true) end
 	helpBusy = false
 	helpBtn.face.Text = "tp ajuda"
 end
