@@ -1567,10 +1567,12 @@ refreshList()
 -- (pés dele no meio do meu tronco) > sobe 10 studs aos poucos > noclip desliga
 -- > fico deitado na plataforma do float até eu pular.
 -- Depois do trip eu só me movo na vertical: nada nem ninguém me move para os lados.
+-- Depois do TP, fico sendo teleportado o tempo todo para baixo do jogador (ele anda e não sai de cima de mim).
 -- (o subir/descer é o do Float, na mesma velocidade da subida gradual do TP ajuda)
 local RISE_STUDS = 10          -- quanto sobe no final
 local RISE_SPEED = FLOAT_SPEED -- studs por segundo (mesma do subir/descer do Float)
 local LIE_OFFSET = 3.5         -- do centro dele até o meu centro deitado (aumente se ele afundar, diminua se ficar alto)
+local FOLLOW_LEAD = 0.1        -- segundos extras de antecipação ao seguir o jogador (some ao ping; aumente se ele ainda escorregar)
 local helpBusy = false
 local helpLock = nil           -- { conn, bv, bg } enquanto estou deitado e travado na vertical
 local helpApfPending = false   -- o Anti Part Fling estava ligado e volta quando eu levantar
@@ -1635,6 +1637,14 @@ local function runTpHelp()
 
 	local bv, bg, lockConn
 	local lockX, lockZ = mine.Position.X, mine.Position.Z
+	local victim = selectedPlayer -- sigo sempre o jogador que estava selecionado ao começar
+	local follow = false          -- vira true depois do TP
+	local lastGrab = 0
+
+	local function victimRoot()
+		local ch = victim and victim.Character
+		return ch and ch:FindFirstChild("HumanoidRootPart")
+	end
 	local ok = pcall(function()
 		-- 1) trip: fica deitado
 		hum.PlatformStand = true
@@ -1660,6 +1670,32 @@ local function runTpHelp()
 				return
 			end
 			local pos = r.Position
+
+			-- depois do TP: sigo o jogador (com antecipação do atraso de rede) para ele nunca sair de cima de mim
+			if follow then
+				local tr = victimRoot()
+				if tr then
+					local tv = tr.AssemblyLinearVelocity
+					local lead = math.clamp(player:GetNetworkPing() + FOLLOW_LEAD, 0, 0.8)
+					lockX = tr.Position.X + tv.X * lead
+					lockZ = tr.Position.Z + tv.Z * lead
+
+					-- ele caiu de cima de mim (ficou bem abaixo das minhas costas)? volto para baixo dele
+					if tr.Position.Y < pos.Y + 1 and os.clock() - lastGrab > 1 then
+						lastGrab = os.clock()
+						noclip(true)
+						local ny = tr.Position.Y - LIE_OFFSET
+						r.CFrame = CFrame.new(lockX, ny, lockZ) * r.CFrame.Rotation
+						r.AssemblyLinearVelocity = Vector3.zero
+						floatY = ny - 1.0
+						task.delay(0.35, function()
+							if helpLock then noclip(false) end
+						end)
+						return
+					end
+				end
+			end
+
 			if math.abs(pos.X - lockX) > 0.02 or math.abs(pos.Z - lockZ) > 0.02 then
 				r.CFrame = CFrame.new(lockX, pos.Y, lockZ) * r.CFrame.Rotation
 			end
@@ -1675,12 +1711,13 @@ local function runTpHelp()
 		noclip(true)
 
 		-- 4) TP exatamente abaixo: pés dele no meio do meu tronco (a trava passa a valer neste ponto)
-		local theirs = targetRoot()
+		local theirs = victimRoot()
 		local p = theirs.Position
 		lockX, lockZ = p.X, p.Z
 		mine.CFrame = CFrame.new(p.X, p.Y - LIE_OFFSET, p.Z) * lieRot
 		mine.AssemblyLinearVelocity = Vector3.zero
 		mine.AssemblyAngularVelocity = Vector3.zero
+		follow = true -- daqui em diante sigo o jogador
 		task.wait(0.05)
 
 		-- plataforma do float sob as minhas costas (para eu ficar deitado no final)
@@ -1704,7 +1741,7 @@ local function runTpHelp()
 	noclip(false)
 	task.wait(0.1)
 	if ok and bv and bv.Parent then
-		-- libera só a vertical (a plataforma do float me segura); X e Z continuam travados
+		-- libera só a vertical (a plataforma do float me segura); X e Z continuam travados/seguindo
 		bv.MaxForce = Vector3.new(9e9, 0, 9e9)
 		bv.Velocity = Vector3.zero
 	else
@@ -1713,7 +1750,7 @@ local function runTpHelp()
 		resumeApfAfterHelp()
 	end
 
-	-- 7) continuo deitado e travado na vertical até eu pular
+	-- 7) continuo deitado, travado na vertical e seguindo o jogador até eu pular
 	conns.helpJump = UIS.JumpRequest:Connect(function()
 		local r = myRoot()
 		local h = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
