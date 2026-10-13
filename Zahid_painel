@@ -1572,7 +1572,9 @@ refreshList()
 local RISE_STUDS = 10          -- quanto sobe no final
 local RISE_SPEED = FLOAT_SPEED -- studs por segundo (mesma do subir/descer do Float)
 local LIE_OFFSET = 3.5         -- do centro dele até o meu centro deitado (aumente se ele afundar, diminua se ficar alto)
-local FOLLOW_LEAD = 0.1        -- segundos extras de antecipação ao seguir o jogador (some ao ping; aumente se ele ainda escorregar)
+local FOLLOW_LEAD = 0.03       -- segundos fixos de antecipação ao seguir o jogador
+local FOLLOW_PING_FACTOR = 0.5 -- quanto do seu ping entra na antecipação (0 = ignora o ping)
+local MAX_LEAD_STUDS = 3       -- distância máxima à frente dele (nunca fica longe demais; aumente se ele escorregar)
 local helpBusy = false
 local helpLock = nil           -- { conn, bv, bg } enquanto estou deitado e travado na vertical
 local helpApfPending = false   -- o Anti Part Fling estava ligado e volta quando eu levantar
@@ -1676,9 +1678,11 @@ local function runTpHelp()
 				local tr = victimRoot()
 				if tr then
 					local tv = tr.AssemblyLinearVelocity
-					local lead = math.clamp(player:GetNetworkPing() + FOLLOW_LEAD, 0, 0.8)
-					lockX = tr.Position.X + tv.X * lead
-					lockZ = tr.Position.Z + tv.Z * lead
+					local lead = math.clamp(player:GetNetworkPing() * FOLLOW_PING_FACTOR + FOLLOW_LEAD, 0, 0.35)
+					local ahead = Vector3.new(tv.X, 0, tv.Z) * lead
+					if ahead.Magnitude > MAX_LEAD_STUDS then ahead = ahead.Unit * MAX_LEAD_STUDS end
+					lockX = tr.Position.X + ahead.X
+					lockZ = tr.Position.Z + ahead.Z
 
 					-- ele caiu de cima de mim (ficou bem abaixo das minhas costas)? volto para baixo dele
 					if tr.Position.Y < pos.Y + 1 and os.clock() - lastGrab > 1 then
