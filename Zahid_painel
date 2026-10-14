@@ -1276,26 +1276,32 @@ local function playIntro(onDone)
 end
 
 -- ===== MOVER PARTES (selecionar e mandar a parte para onde eu tocar) =====
--- Ligado: toque numa parte do mapa para selecionar (toque de novo para desselecionar).
+-- Ligado: aparece um mini menu (rotacionar, girar, velocidade) e dá para mexer em partes de qualquer
+-- distância. Toque numa parte do mapa para selecionar (toque de novo para desselecionar).
 --   contorno VERMELHO = parte ancorada; contorno AZUL = parte solta (não ancorada).
 -- Segure o dedo por 1 segundo numa parte solta para CONTROLAR: depois disso, cada toque em qualquer
 -- lugar do mapa manda a parte para lá (ela mantém a rotação que tinha e fica parada no ponto).
 -- Tocar fora da parte NÃO desseleciona: o controle só termina quando você desliga o botão.
--- Parte ancorada não dá para controlar. Só move partes que o seu cliente consegue mover
--- (ex.: as soltas perto de você). Se a parte não chegar ao ponto, o contorno pisca vermelho.
+-- Parte ancorada não dá para controlar. Só move partes que o seu cliente consegue mover: enquanto
+-- você controla uma parte, o código mantém o raio de simulação gigante (a cada frame) para o seu
+-- cliente ficar com a física dela, mesmo de longe. Se ela não chegar ao ponto, o contorno pisca vermelho.
 -- Partes de personagens de jogadores não são selecionáveis (só as do mapa).
 local PART_HOLD_TIME = 1       -- segundos segurando para controlar
 local PART_TAP_TOLERANCE = 12  -- pixels que o dedo pode mexer e ainda contar como "toque"
-local PART_MOVE_SPEED = 100    -- studs por segundo até o ponto tocado
+local PART_MOVE_SPEED = 100    -- velocidade inicial (studs por segundo); o mini menu muda
+local PART_SPIN_RATE = 4       -- velocidade do "girar" (radianos por segundo)
+local PART_RAY_LENGTH = 5000   -- alcance do toque (studs): selecionar e mandar a parte de longe
 local PART_RED = Color3.fromRGB(255, 60, 60)
 local PART_BLUE = Color3.fromRGB(70, 140, 255)
 
 local partTool
+local partApi = {} -- usado pelo mini menu (rotacionar, girar, velocidade)
 do
 	local on = false
 	local selected, highlight
 	local press   -- { part, pos, input, token, held }
-	local control -- { part, att, ap, ao, token } enquanto estou controlando uma parte
+	local control -- { part, att, ap, ao, token, target, rot, spin, spinAngle } enquanto controlo uma parte
+	local speed = PART_MOVE_SPEED
 	local token = 0
 	local pointer = Vector2.zero
 	local connList = {}
@@ -1336,7 +1342,7 @@ do
 		if player.Character then table.insert(ignore, player.Character) end
 		if floatPart then table.insert(ignore, floatPart) end
 		params.FilterDescendantsInstances = ignore
-		local result = workspace:Raycast(ray.Origin, ray.Direction * 1000, params)
+		local result = workspace:Raycast(ray.Origin, ray.Direction * PART_RAY_LENGTH, params)
 		local inst = result and result.Instance
 		if not inst or not inst:IsA("BasePart") or inst:IsA("Terrain") then return nil end
 		if belongsToPlayer(inst) then return nil end
@@ -1385,16 +1391,19 @@ do
 		if highlight then highlight.FillTransparency = 1 end
 	end
 
-	local function beginControl(part)
-		if control then return end
-		if isAnchored(part) then
-			flash(PART_RED) -- ancorada: não dá para controlar
-			return
-		end
-
-		-- tenta ficar com a física das partes soltas por perto (sem isso o servidor pode ficar com elas)
+	-- fica com a física das partes soltas, mesmo longe (sem isso o servidor pega a parte de volta
+	-- quando ela se afasta de você, e ela para de obedecer). Precisa repetir a cada frame.
+	local function claimPhysics()
 		pcall(function() player.MaximumSimulationRadius = 1e9 end)
 		if sethiddenproperty then pcall(sethiddenproperty, player, "SimulationRadius", 1e9) end
+	end
+
+	-- cria (ou recria) os controles que seguram a posição e a rotação da parte
+	local function buildConstraints(c)
+		local part = c.part
+		if c.ap then c.ap:Destroy() end
+		if c.ao then c.ao:Destroy() end
+		if c.att then c.att:Destroy() end
 
 		local att = Instance.new("Attachment")
 		att.Parent = part
@@ -1404,21 +1413,39 @@ do
 		ap.Attachment0 = att
 		ap.RigidityEnabled = false
 		ap.MaxForce = math.huge
-		ap.MaxVelocity = PART_MOVE_SPEED
+		ap.MaxVelocity = speed
 		ap.Responsiveness = 40
-		ap.Position = part.Position -- fica onde está até eu tocar em outro lugar
+		ap.Position = c.target
 		ap.Parent = part
 
-		-- mantém a rotação que a parte tem agora (se estiver deitada, continua deitada)
 		local ao = Instance.new("AlignOrientation")
 		ao.Mode = Enum.OrientationAlignmentMode.OneAttachment
 		ao.Attachment0 = att
 		ao.MaxTorque = math.huge
-		ao.Responsiveness = 20
-		ao.CFrame = part.CFrame.Rotation
+		ao.Responsiveness = 30
+		ao.CFrame = CFrame.Angles(0, c.spinAngle, 0) * c.rot
 		ao.Parent = part
 
-		control = { part = part, att = att, ap = ap, ao = ao, token = 0 }
+		c.att, c.ap, c.ao = att, ap, ao
+	end
+
+	local function beginControl(part)
+		if control then return end
+		if isAnchored(part) then
+			flash(PART_RED) -- ancorada: não dá para controlar
+			return
+		end
+		claimPhysics()
+
+		-- fica onde está, com a rotação que tem agora (se estiver deitada, continua deitada),
+		-- até eu tocar em outro lugar
+		control = {
+			part = part, token = 0,
+			target = part.Position,
+			rot = part.CFrame.Rotation,
+			spin = false, spinAngle = 0,
+		}
+		buildConstraints(control)
 		if highlight then
 			highlight.FillColor = PART_BLUE
 			highlight.FillTransparency = 0.7
@@ -1440,13 +1467,13 @@ do
 		if player.Character then table.insert(ignore, player.Character) end
 		if floatPart then table.insert(ignore, floatPart) end
 		params.FilterDescendantsInstances = ignore
-		local hit = workspace:Raycast(ray.Origin, ray.Direction * 1000, params)
+		local hit = workspace:Raycast(ray.Origin, ray.Direction * PART_RAY_LENGTH, params)
 
 		local target
 		if hit then
-			-- fica apoiada na superfície tocada (considera o tamanho e a rotação da parte)
+			-- fica apoiada na superfície tocada (considera o tamanho e a rotação atuais da parte)
 			local n = hit.Normal
-			local cf, s = part.CFrame, part.Size
+			local cf, s = CFrame.Angles(0, c.spinAngle, 0) * c.rot, part.Size
 			local ext = 0.5 * (math.abs(n:Dot(cf.RightVector)) * s.X
 				+ math.abs(n:Dot(cf.UpVector)) * s.Y
 				+ math.abs(n:Dot(cf.LookVector)) * s.Z)
@@ -1456,13 +1483,14 @@ do
 			target = ray.Origin + ray.Direction * (part.Position - ray.Origin).Magnitude
 		end
 
+		c.target = target
 		c.ap.Position = target
 		flash(PART_BLUE)
 
 		-- se a parte não chegar ao ponto, avisa piscando em vermelho
 		c.token += 1
 		local tk = c.token
-		local wait = (part.Position - target).Magnitude / PART_MOVE_SPEED + 1.2
+		local wait = (part.Position - target).Magnitude / speed + 1.5
 		task.delay(wait, function()
 			if control == c and c.token == tk and part.Parent and (part.Position - target).Magnitude > 6 then
 				flash(PART_RED)
@@ -1470,8 +1498,8 @@ do
 		end)
 	end
 
-	-- a cada frame: atualiza a cor do contorno e cuida de parte removida
-	local function step()
+	-- a cada frame: cor do contorno, parte removida e manutenção do controle (sem precisar religar o botão)
+	local function step(dt)
 		if selected then
 			if not selected.Parent then
 				endControl()
@@ -1480,6 +1508,48 @@ do
 				highlight.OutlineColor = isAnchored(selected) and PART_RED or PART_BLUE
 			end
 		end
+
+		local c = control
+		if c then
+			claimPhysics()
+			-- se algo removeu os controles da parte, recria
+			if c.att.Parent ~= c.part or c.ap.Parent ~= c.part or c.ao.Parent ~= c.part then
+				buildConstraints(c)
+			end
+			c.ap.Position = c.target
+			c.ap.MaxVelocity = speed
+			if c.spin then c.spinAngle = (c.spinAngle + PART_SPIN_RATE * dt) % (math.pi * 2) end
+			c.ao.CFrame = CFrame.Angles(0, c.spinAngle, 0) * c.rot
+		end
+	end
+
+	-- ===== API para o mini menu =====
+	-- gira a parte 90 graus em torno de um eixo do mundo ("X", "Y" ou "Z"); false se não há controle
+	partApi.rotate = function(axis)
+		local c = control
+		if not c then return false end
+		local a = math.rad(90)
+		local r = (axis == "X" and CFrame.Angles(a, 0, 0)) or (axis == "Y" and CFrame.Angles(0, a, 0)) or CFrame.Angles(0, 0, a)
+		c.rot = r * c.rot
+		return true
+	end
+	partApi.toggleSpin = function()
+		local c = control
+		if not c then return false end
+		c.spin = not c.spin
+		return true
+	end
+	partApi.isSpinning = function() return control ~= nil and control.spin end
+	partApi.hasControl = function() return control ~= nil end
+	partApi.setSpeed = function(v) speed = v end
+	partApi.getSpeed = function() return speed end
+	partApi.status = function()
+		if control then return "Controlando: " .. control.part.Name .. ". Toque no mapa para mandar a parte." end
+		if selected then
+			if isAnchored(selected) then return "Parte ancorada: não dá para controlar." end
+			return "Selecionada: " .. selected.Name .. ". Segure 1 s para controlar."
+		end
+		return "Toque numa parte para selecionar."
 	end
 
 	local function onBegan(input, processed)
@@ -2077,13 +2147,172 @@ task.spawn(function()
 	end
 end)
 
--- ===== MOVER PARTES (botão) =====
-local partsOn = false
-partsBtn.face.Activated:Connect(function()
-	partsOn = not partsOn
-	partTool(partsOn)
-	partsBtn.setOn(partsOn)
-end)
+-- ===== MOVER PARTES (mini menu + botão) =====
+-- O mini menu aparece quando o botão "mover partes" está ligado: rotacionar (90 graus em X, Y ou Z),
+-- girar (liga/desliga) e a velocidade com que a parte vai até o ponto tocado.
+do
+	local PARTS_MINI_H = 198
+	local partsMenu = Instance.new("Frame")
+	partsMenu.Size = UDim2.fromOffset(PANEL_W, PARTS_MINI_H)
+	partsMenu.Position = UDim2.fromOffset(0, BUBBLE_H + 8)
+	partsMenu.Active = true
+	partsMenu.Visible = false
+	partsMenu.Parent = bubble
+	Instance.new("UICorner", partsMenu).CornerRadius = UDim.new(0, 14)
+	addGradient(partsMenu)
+
+	local miniLabels = {}
+	local function miniLabel(text, y, h, size)
+		local l = Instance.new("TextLabel")
+		l.Size = UDim2.new(1, -16, 0, h)
+		l.Position = UDim2.fromOffset(8, y)
+		l.BackgroundTransparency = 1
+		l.Font = T.font
+		l.TextSize = size
+		l.TextWrapped = true
+		l.TextTruncate = Enum.TextTruncate.AtEnd
+		l.TextColor3 = T.text
+		l.TextXAlignment = Enum.TextXAlignment.Left
+		l.TextYAlignment = Enum.TextYAlignment.Top
+		l.Text = text
+		l.Parent = partsMenu
+		table.insert(miniLabels, l)
+		return l
+	end
+
+	local partsStatus = miniLabel("", 6, 40, 13)
+	miniLabel("Rotacionar 90 graus", 48, 16, 13)
+
+	local PARTS_RED = Color3.fromRGB(255, 110, 110)
+	local noticeUntil = 0
+	local function partsNotice(text)
+		partsStatus.Text = text
+		partsStatus.TextColor3 = PARTS_RED
+		noticeUntil = os.clock() + 1.6
+	end
+
+	local axisW = (PANEL_W - 16 - 16) / 3
+	for i, axis in ipairs({ "X", "Y", "Z" }) do
+		local b = new3DButton(partsMenu, axis, UDim2.fromOffset(8 + (i - 1) * (axisW + 8), 66),
+			UDim2.fromOffset(axisW, ROW_H), T.faceOff, T.baseOff)
+		b.face.Activated:Connect(function()
+			if not partApi.rotate(axis) then partsNotice("Segure numa parte para controlar primeiro.") end
+		end)
+	end
+
+	local spinBtn = new3DButton(partsMenu, "Girar", UDim2.fromOffset(8, 106),
+		UDim2.new(1, -16, 0, ROW_H), T.faceOff, T.baseOff)
+	spinBtn.face.Activated:Connect(function()
+		if not partApi.toggleSpin() then partsNotice("Segure numa parte para controlar primeiro.") end
+	end)
+
+	local PARTS_SPEED_MIN, PARTS_SPEED_MAX = 10, 300
+	local speedLabel = miniLabel("", 146, 16, 13)
+	local speedTrack = Instance.new("Frame")
+	speedTrack.Size = UDim2.new(1, -16, 0, 24)
+	speedTrack.Position = UDim2.fromOffset(8, 166)
+	speedTrack.BackgroundTransparency = 1
+	speedTrack.Active = true
+	speedTrack.Parent = partsMenu
+
+	local speedBar = Instance.new("Frame")
+	speedBar.Size = UDim2.new(1, 0, 0, 6)
+	speedBar.Position = UDim2.new(0, 0, 0.5, -3)
+	speedBar.BackgroundColor3 = T.baseOff
+	speedBar.BorderSizePixel = 0
+	speedBar.Parent = speedTrack
+	Instance.new("UICorner", speedBar).CornerRadius = UDim.new(1, 0)
+
+	local speedKnob = Instance.new("Frame")
+	speedKnob.Size = UDim2.fromOffset(16, 16)
+	speedKnob.BackgroundColor3 = T.faceHelp
+	speedKnob.BorderSizePixel = 0
+	speedKnob.Active = true
+	speedKnob.Parent = speedTrack
+	Instance.new("UICorner", speedKnob).CornerRadius = UDim.new(1, 0)
+
+	local function showSpeed(v)
+		local a = math.clamp((v - PARTS_SPEED_MIN) / (PARTS_SPEED_MAX - PARTS_SPEED_MIN), 0, 1)
+		speedKnob.Position = UDim2.new(a, -8, 0.5, -8)
+		speedLabel.Text = "Velocidade: " .. v
+	end
+	showSpeed(partApi.getSpeed())
+
+	local speedDragging = false
+	local function setSpeedFromX(x)
+		local a = math.clamp((x - speedTrack.AbsolutePosition.X) / speedTrack.AbsoluteSize.X, 0, 1)
+		local v = math.floor(PARTS_SPEED_MIN + a * (PARTS_SPEED_MAX - PARTS_SPEED_MIN) + 0.5)
+		partApi.setSpeed(v)
+		showSpeed(v)
+	end
+	local function speedDragStart(input)
+		if isPress(input) then
+			speedDragging = true
+			setSpeedFromX(input.Position.X)
+		end
+	end
+	speedTrack.InputBegan:Connect(speedDragStart)
+	speedKnob.InputBegan:Connect(speedDragStart)
+	UIS.InputChanged:Connect(function(input)
+		if speedDragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+			or input.UserInputType == Enum.UserInputType.Touch) then
+			setSpeedFromX(input.Position.X)
+		end
+	end)
+	UIS.InputEnded:Connect(function(input)
+		if isPress(input) then speedDragging = false end
+	end)
+
+	-- as cores acompanham o tema atual (romântico ou dark) sempre que o mini menu abre
+	local function refreshPartsTheme()
+		for _, l in ipairs(miniLabels) do
+			l.Font = T.font
+			if l ~= partsStatus then l.TextColor3 = T.text end
+		end
+		speedBar.BackgroundColor3 = T.baseOff
+		speedKnob.BackgroundColor3 = T.faceHelp
+	end
+
+	-- a cada frame (só com o mini menu aberto): posição, texto de estado e botão "Girar"
+	local lastStatus, lastSpin = nil, nil
+	RunService.Heartbeat:Connect(function()
+		if not partsMenu.Visible then return end
+
+		-- fica logo abaixo do menu principal (ou do botão, se o menu estiver fechado); sem espaço, vai para cima
+		local y = panel.Visible and (BUBBLE_H + 8 + PANEL_H + 6) or (BUBBLE_H + 8)
+		if bubble.AbsolutePosition.Y + y + PARTS_MINI_H > gui.AbsoluteSize.Y then
+			y = -PARTS_MINI_H - 8
+		end
+		partsMenu.Position = UDim2.fromOffset(0, y)
+
+		if os.clock() >= noticeUntil then
+			local s = partApi.status()
+			if s ~= lastStatus or partsStatus.TextColor3 == PARTS_RED then
+				lastStatus = s
+				partsStatus.Text = s
+				partsStatus.TextColor3 = T.text
+			end
+		end
+
+		local spinning = partApi.isSpinning()
+		if spinning ~= lastSpin then
+			lastSpin = spinning
+			spinBtn.setOn(spinning)
+		end
+	end)
+
+	local partsOn = false
+	partsBtn.face.Activated:Connect(function()
+		partsOn = not partsOn
+		partTool(partsOn)
+		partsBtn.setOn(partsOn)
+		partsMenu.Visible = partsOn
+		if partsOn then
+			refreshPartsTheme()
+			lastStatus, lastSpin = nil, nil
+		end
+	end)
+end
 
 -- ===== ABRIR / FECHAR O PAINEL (com animação) =====
 local panelOpen = false
