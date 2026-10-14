@@ -1203,133 +1203,62 @@ local function playIntro(onDone)
 	mark:FindFirstChildOfClass("UIScale").Scale = BIG
 	mark.Parent = introGui
 
-	-- 4) explosão de corações COM FÍSICA (gravidade + quicam nas bordas da tela)
+	-- 4) explosão igual à do coração preto (anel de luz + estilhaços com os mesmos emojis), só que mais lenta
 	local EMOJIS = { "❤️", "💖", "💘", "💕", "💝", "🔥", "🌹" }
-	local HEART_COUNT = 110
-	local GRAVITY = 1500      -- px/s² (maior = cai mais rápido)
-	local BOUNCE_WALL = 0.7   -- 1 = quica sem perder força
-	local BOUNCE_FLOOR = 0.55
-	local TOTAL_TIME = 3    -- segundos até sumir tudo
-	local FADE_TIME = 0.6
+	local cx, cy = introGui.AbsoluteSize.X / 2, introGui.AbsoluteSize.Y / 2
+	local SLOW = 1.6 -- segundos de cada estilhaço (o do coração preto usa 0,6 a 0,7)
 
-	local screen = introGui.AbsoluteSize
-	local hearts = {}
-	for _ = 1, HEART_COUNT do
-		local size = math.random(50, 60)
-		local label = newEmoji(EMOJIS[math.random(#EMOJIS)], size)
-		label.ZIndex = 3
-		local angle = math.random() * math.pi * 2
-		local speed = math.random(500, 1500)
-		table.insert(hearts, {
-			label = label,
-			r = size / 2,
-			x = screen.X / 2,
-			y = screen.Y / 2,
-			vx = math.cos(angle) * speed,
-			vy = math.sin(angle) * speed - 400, -- leve impulso para cima
-			rot = math.random(-30, 30),
-			vrot = math.random(-500, 500),
-		})
+	local function ring()
+		local r = Instance.new("Frame")
+		r.AnchorPoint = Vector2.new(0.5, 0.5)
+		r.Position = UDim2.fromOffset(cx, cy)
+		r.Size = UDim2.fromOffset(10, 10)
+		r.BackgroundTransparency = 1
+		r.ZIndex = 4
+		r.Parent = introGui
+		Instance.new("UICorner", r).CornerRadius = UDim.new(1, 0)
+		local s = Instance.new("UIStroke")
+		s.Color = Color3.fromRGB(255, 255, 255)
+		s.Thickness = 3
+		s.Parent = r
+		tween(r, SLOW, { Size = UDim2.fromOffset(520, 520) }, Enum.EasingStyle.Quint)
+		tween(s, SLOW, { Transparency = 1 })
+		task.delay(SLOW + 0.1, function() r:Destroy() end)
 	end
 
-	local function stepHearts(dt)
-		local W, H = introGui.AbsoluteSize.X, introGui.AbsoluteSize.Y
-		local RESTITUTION = 0.6 -- quique entre corações (1 = sem perder força)
-
-		-- 1) movimento + paredes, teto e chão
-		for _, p in ipairs(hearts) do
-			p.vy += GRAVITY * dt
-			p.x += p.vx * dt
-			p.y += p.vy * dt
-			p.rot += p.vrot * dt
-
-			if p.x < p.r then
-				p.x = p.r
-				p.vx = -p.vx * BOUNCE_WALL
-				p.vrot = -p.vrot * 0.8
-			elseif p.x > W - p.r then
-				p.x = W - p.r
-				p.vx = -p.vx * BOUNCE_WALL
-				p.vrot = -p.vrot * 0.8
-			end
-
-			if p.y < p.r then
-				p.y = p.r
-				p.vy = -p.vy * BOUNCE_WALL
-			end
-
-			if p.y > H - p.r then
-				p.y = H - p.r
-				p.vy = -p.vy * BOUNCE_FLOOR
-				if math.abs(p.vy) < 60 then p.vy = 0 end
-				local friction = 1 - math.min(1, 6 * dt)
-				p.vx *= friction
-				p.vrot *= friction
-			end
-		end
-
-		-- 2) colisão entre os corações
-		for i = 1, #hearts - 1 do
-			local a = hearts[i]
-			for j = i + 1, #hearts do
-				local b = hearts[j]
-				local dx, dy = b.x - a.x, b.y - a.y
-				local minDist = a.r + b.r
-				local distSq = dx * dx + dy * dy
-				if distSq < minDist * minDist and distSq > 0.0001 then
-					local dist = math.sqrt(distSq)
-					local nx, ny = dx / dist, dy / dist
-
-					-- separa os dois
-					local overlap = (minDist - dist) / 2
-					a.x -= nx * overlap
-					a.y -= ny * overlap
-					b.x += nx * overlap
-					b.y += ny * overlap
-
-					-- troca de velocidade na direção do choque
-					local vn = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny
-					if vn < 0 then
-						local impulse = -(1 + RESTITUTION) * vn / 2
-						a.vx -= impulse * nx
-						a.vy -= impulse * ny
-						b.vx += impulse * nx
-						b.vy += impulse * ny
-					end
-				end
-			end
-		end
-
-		-- 3) mantém dentro da tela e atualiza a posição na tela
-		for _, p in ipairs(hearts) do
-			p.x = math.clamp(p.x, p.r, W - p.r)
-			p.y = math.clamp(p.y, p.r, H - p.r)
-			p.label.Position = UDim2.fromOffset(p.x, p.y)
-			p.label.Rotation = p.rot
+	local function burst(emoji, count, minDist, maxDist, size)
+		for _ = 1, count do
+			local l = newEmoji(emoji, size)
+			l.ZIndex = 3
+			local a = math.random() * math.pi * 2
+			local d = math.random(minDist, maxDist)
+			l.Rotation = math.random(-40, 40)
+			tween(l, SLOW, {
+				Position = UDim2.fromOffset(cx + math.cos(a) * d, cy + math.sin(a) * d),
+				Rotation = l.Rotation + math.random(-260, 260),
+			}, Enum.EasingStyle.Quint)
+			task.delay(SLOW * 0.4, function()
+				tween(l, SLOW * 0.6, { TextTransparency = 1 }, Enum.EasingStyle.Linear)
+			end)
+			task.delay(SLOW + 0.05, function() l:Destroy() end)
 		end
 	end
 
-	-- 5) o beijo original volta a ficar minúsculo, "de onde veio"
+	-- duas ondas de estilhaços
+	ring()
+	for _, e in ipairs(EMOJIS) do burst(e, 2, 120, 320, 34) end
+	task.wait(0.9)
+	ring()
+	for _, e in ipairs(EMOJIS) do burst(e, 2, 80, 240, 30) end
+
+	-- 5) o beijo original volta a ficar minúsculo, \"de onde veio\"
 	tween(kissScale, 0.6, { Scale = 0.02 }, Enum.EasingStyle.Back, Enum.EasingDirection.In)
 		.Completed:Connect(function() kiss:Destroy() end)
 
-	-- 6) simula a física e, ao fim do tempo, some tudo
-	local startTime = os.clock()
-	local fading = false
-	while true do
-		local dt = math.min(RunService.Heartbeat:Wait(), 1 / 30)
-		local elapsed = os.clock() - startTime
-		stepHearts(dt)
-
-		if not fading and elapsed >= TOTAL_TIME - FADE_TIME then
-			fading = true
-			tween(mark, FADE_TIME, { TextTransparency = 1 })
-			for _, p in ipairs(hearts) do
-				tween(p.label, FADE_TIME, { TextTransparency = 1 })
-			end
-		end
-		if elapsed >= TOTAL_TIME then break end
-	end
+	-- 6) espera os estilhaços terminarem e some a marca do beijo
+	task.wait(SLOW + 0.1)
+	tween(mark, 0.8, { TextTransparency = 1 })
+	task.wait(0.8)
 
 	introGui:Destroy()
 	onDone()
@@ -1713,6 +1642,7 @@ do
 		lockChar, lockVictim = char, victim
 		lockYaw = math.atan2(-mine.CFrame.LookVector.X, -mine.CFrame.LookVector.Z)
 		lockGroundY = vhrp.Position.Y - feetOffset(vhum, vhrp)
+		hum.PlatformStand = false -- em pé, nunca deitado (sem trip)
 		helpBtn.setOn(true)
 		helpBtn.face.Text = "Subindo..."
 
@@ -1896,8 +1826,9 @@ do
 	end
 
 	local function teleSelect(part)
-		if part.Anchored then
-			teleSetStatus("Essa parte está ancorada. Escolha outra.", RED)
+		-- ancorada = não dá para controlar (erro); não ancorada = seleciona
+		if part.Anchored == true then
+			teleSetStatus("Parte ancorada (" .. part.Name .. "). Não dá para controlar, escolha outra.", RED)
 			return
 		end
 		teleClear()
@@ -1907,7 +1838,7 @@ do
 		tele.box.LineThickness = 0.05
 		tele.box.Color3 = Color3.fromRGB(255, 80, 120)
 		tele.box.Parent = workspace
-		teleSetStatus("Selecionada: " .. part.Name)
+		teleSetStatus("Selecionada: " .. part.Name .. " (não ancorada)")
 	end
 
 	local function teleRotate()
