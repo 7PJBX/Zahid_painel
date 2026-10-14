@@ -1275,6 +1275,246 @@ local function playIntro(onDone)
 	onDone()
 end
 
+-- ===== MOVER PARTES (selecionar e arrastar com o dedo) =====
+-- Ligado: toque numa parte do mapa para selecionar (toque de novo para desselecionar).
+--   contorno VERMELHO = parte ancorada; contorno AZUL = parte solta (não ancorada).
+-- Segure o dedo por 1 segundo numa parte para controlar: enquanto o dedo estiver na tela, a parte
+-- segue o dedo (a distância da câmera é mantida e a câmera fica parada). Parte ancorada não dá
+-- para controlar. Só move partes que o seu cliente consegue mover (ex.: as soltas perto de você).
+-- Partes de personagens de jogadores não são selecionáveis (só as do mapa).
+local PART_HOLD_TIME = 1       -- segundos segurando para controlar
+local PART_TAP_TOLERANCE = 12  -- pixels que o dedo pode mexer e ainda contar como "parado"
+local PART_RED = Color3.fromRGB(255, 60, 60)
+local PART_BLUE = Color3.fromRGB(70, 140, 255)
+
+local partTool
+do
+	local on = false
+	local selected, highlight
+	local press -- { part, pos, input, token, held }
+	local grab  -- { part, att, ap, ao, dist, camType, input }
+	local token = 0
+	local pointer = Vector2.zero
+	local connList = {}
+
+	local function isAnchored(part)
+		if part.Anchored then return true end
+		local root = part.AssemblyRootPart
+		return root ~= nil and root.Anchored
+	end
+
+	-- o toque está em cima do meu menu?
+	local function overMenu(pos)
+		local pg = player:FindFirstChildOfClass("PlayerGui")
+		local menu = pg and pg:FindFirstChild("MiniMenu")
+		if not menu then return false end
+		for _, obj in ipairs(pg:GetGuiObjectsAtPosition(pos.X, pos.Y)) do
+			if obj:IsDescendantOf(menu) then return true end
+		end
+		return false
+	end
+
+	local function belongsToPlayer(inst)
+		local m = inst
+		while m and m ~= workspace do
+			if m:IsA("Model") and Players:GetPlayerFromCharacter(m) then return true end
+			m = m.Parent
+		end
+		return false
+	end
+
+	-- qual parte do mapa está sob o dedo
+	local function pick(pos)
+		local cam = workspace.CurrentCamera
+		local ray = cam:ScreenPointToRay(pos.X, pos.Y)
+		local params = RaycastParams.new()
+		params.FilterType = Enum.RaycastFilterType.Exclude
+		local ignore = {}
+		if player.Character then table.insert(ignore, player.Character) end
+		if floatPart then table.insert(ignore, floatPart) end
+		params.FilterDescendantsInstances = ignore
+		local result = workspace:Raycast(ray.Origin, ray.Direction * 1000, params)
+		local inst = result and result.Instance
+		if not inst or not inst:IsA("BasePart") or inst:IsA("Terrain") then return nil end
+		if belongsToPlayer(inst) then return nil end
+		return inst
+	end
+
+	local function clearSelection()
+		if highlight then highlight:Destroy() highlight = nil end
+		selected = nil
+	end
+
+	local function selectPart(part)
+		clearSelection()
+		selected = part
+		local hl = Instance.new("Highlight")
+		hl.Adornee = part
+		hl.FillTransparency = 1
+		hl.OutlineTransparency = 0
+		hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+		hl.OutlineColor = isAnchored(part) and PART_RED or PART_BLUE
+		hl.Parent = part
+		highlight = hl
+	end
+
+	-- pisca o preenchimento da seleção (aviso rápido)
+	local function flash(color)
+		local hl = highlight
+		if not hl then return end
+		hl.FillColor = color
+		hl.FillTransparency = 0.5
+		task.delay(0.25, function()
+			if hl.Parent and not grab then hl.FillTransparency = 1 end
+		end)
+	end
+
+	local function endGrab()
+		local g = grab
+		grab = nil
+		if not g then return end
+		if g.ap then g.ap:Destroy() end
+		if g.ao then g.ao:Destroy() end
+		if g.att then g.att:Destroy() end
+		local cam = workspace.CurrentCamera
+		if cam then cam.CameraType = g.camType end -- a câmera volta ao normal
+		if highlight then highlight.FillTransparency = 1 end
+	end
+
+	local function beginGrab(part, input)
+		if grab then return end
+		if isAnchored(part) then
+			flash(PART_RED) -- ancorada: não dá para controlar
+			return
+		end
+		local cam = workspace.CurrentCamera
+
+		local att = Instance.new("Attachment")
+		att.Parent = part
+
+		local ap = Instance.new("AlignPosition")
+		ap.Mode = Enum.PositionAlignmentMode.OneAttachment
+		ap.Attachment0 = att
+		ap.RigidityEnabled = false
+		ap.MaxForce = math.huge
+		ap.MaxVelocity = math.huge
+		ap.Responsiveness = 40
+		ap.Position = part.Position
+		ap.Parent = part
+
+		-- mantém a parte sem girar enquanto eu a movo
+		local ao = Instance.new("AlignOrientation")
+		ao.Mode = Enum.OrientationAlignmentMode.OneAttachment
+		ao.Attachment0 = att
+		ao.MaxTorque = math.huge
+		ao.Responsiveness = 20
+		ao.CFrame = part.CFrame.Rotation
+		ao.Parent = part
+
+		grab = {
+			part = part, att = att, ap = ap, ao = ao, input = input,
+			dist = (part.Position - cam.CFrame.Position).Magnitude,
+			camType = cam.CameraType,
+		}
+		cam.CameraType = Enum.CameraType.Scriptable -- trava a câmera enquanto arrasto
+		if highlight then
+			highlight.FillColor = PART_BLUE
+			highlight.FillTransparency = 0.7
+		end
+	end
+
+	-- a cada frame: atualiza a cor do contorno e leva a parte até o dedo
+	local function step()
+		if selected then
+			if not selected.Parent then
+				endGrab()
+				clearSelection()
+			elseif highlight then
+				highlight.OutlineColor = isAnchored(selected) and PART_RED or PART_BLUE
+			end
+		end
+		if grab then
+			local cam = workspace.CurrentCamera
+			local ray = cam:ScreenPointToRay(pointer.X, pointer.Y)
+			grab.ap.Position = ray.Origin + ray.Direction * grab.dist
+		end
+	end
+
+	local function onBegan(input, processed)
+		if not isPress(input) then return end
+		if input.UserInputType == Enum.UserInputType.MouseButton1 and processed then return end
+		local pos = Vector2.new(input.Position.X, input.Position.Y)
+		if overMenu(pos) then return end
+
+		pointer = pos
+		token += 1
+		local myToken = token
+		local part = pick(pos)
+		press = { part = part, pos = pos, input = input, held = false, token = myToken }
+
+		if part then
+			task.delay(PART_HOLD_TIME, function()
+				local p = press
+				if not on or not p or p.token ~= myToken or grab then return end
+				if (pointer - p.pos).Magnitude > PART_TAP_TOLERANCE then return end
+				p.held = true
+				if selected ~= part then selectPart(part) end
+				beginGrab(part, p.input)
+			end)
+		end
+	end
+
+	local function onChanged(input)
+		if input.UserInputType == Enum.UserInputType.MouseMovement then
+			pointer = Vector2.new(input.Position.X, input.Position.Y)
+		elseif input.UserInputType == Enum.UserInputType.Touch then
+			local owner = (grab and grab.input) or (press and press.input)
+			if owner == input then
+				pointer = Vector2.new(input.Position.X, input.Position.Y)
+			end
+		end
+	end
+
+	local function onEnded(input)
+		if not isPress(input) then return end
+		if input.UserInputType == Enum.UserInputType.Touch then
+			local owner = (grab and grab.input) or (press and press.input)
+			if owner and owner ~= input then return end -- outro dedo
+		end
+		local p = press
+		press = nil
+		if grab then
+			endGrab() -- soltou o dedo: larga a parte
+			return
+		end
+		-- toque rápido: seleciona / desseleciona
+		if p and not p.held and (pointer - p.pos).Magnitude <= PART_TAP_TOLERANCE then
+			if p.part then
+				if selected == p.part then clearSelection() else selectPart(p.part) end
+			else
+				clearSelection()
+			end
+		end
+	end
+
+	partTool = function(enable)
+		if enable == on then return end
+		on = enable
+		if on then
+			table.insert(connList, UIS.InputBegan:Connect(onBegan))
+			table.insert(connList, UIS.InputChanged:Connect(onChanged))
+			table.insert(connList, UIS.InputEnded:Connect(onEnded))
+			table.insert(connList, RunService.Heartbeat:Connect(step))
+		else
+			for _, c in ipairs(connList) do c:Disconnect() end
+			table.clear(connList)
+			endGrab()
+			clearSelection()
+			press = nil
+		end
+	end
+end
+
 -- ===== INTERFACE =====
 local gui = Instance.new("ScreenGui")
 gui.Name = "MiniMenu"
@@ -1336,7 +1576,8 @@ local ROW_REJOIN = #options + 6
 local ROW_HOP = #options + 7
 local ROW_SETPOS = #options + 8
 local ROW_FARM = #options + 9
-local CONTENT_H = rowY(ROW_FARM) + ROW_H + 6 -- altura total do conteúdo rolável
+local ROW_PARTS = #options + 10
+local CONTENT_H = rowY(ROW_PARTS) + ROW_H + 6 -- altura total do conteúdo rolável
 
 local panel = Instance.new("Frame")
 panel.Size = UDim2.fromOffset(PANEL_W, PANEL_H)
@@ -1430,7 +1671,7 @@ local tpBtn = new3DButton(content, "TP até o jogador", UDim2.fromOffset(8, rowY
 	UDim2.new(1, -16, 0, ROW_H), T.faceTp, T.baseTp)
 tpBtn.face.TextTruncate = Enum.TextTruncate.AtEnd
 
-local helpBtn = new3DButton(content, "tp ajuda", UDim2.fromOffset(8, rowY(ROW_HELP)),
+local helpBtn = new3DButton(content, "ajudar", UDim2.fromOffset(8, rowY(ROW_HELP)),
 	UDim2.new(1, -16, 0, ROW_H), T.faceHelp, T.baseHelp)
 helpBtn.face.TextTruncate = Enum.TextTruncate.AtEnd
 
@@ -1447,6 +1688,10 @@ setPosBtn.face.TextTruncate = Enum.TextTruncate.AtEnd
 local farmBtn = new3DButton(content, "Auto farm", UDim2.fromOffset(8, rowY(ROW_FARM)),
 	UDim2.new(1, -16, 0, ROW_H), T.faceOff, T.baseOff)
 farmBtn.face.TextTruncate = Enum.TextTruncate.AtEnd
+
+local partsBtn = new3DButton(content, "mover partes", UDim2.fromOffset(8, rowY(ROW_PARTS)),
+	UDim2.new(1, -16, 0, ROW_H), T.faceOff, T.baseOff)
+partsBtn.face.TextTruncate = Enum.TextTruncate.AtEnd
 
 -- texto do botão de teleporte (muda para os usuários da lista, pelo nome de usuário)
 local function updateTpText()
@@ -1562,18 +1807,18 @@ end)
 
 refreshList()
 
--- ===== TP AJUDA (em pé) =====
--- "fly" que segura no ar > noclip > TP exatamente abaixo do jogador > float
--- > sobe 10 studs aos poucos > noclip desliga > fico em pé na plataforma do float até eu pular.
--- Eu só me movo na vertical: nada nem ninguém me move para os lados (a trava solta quando eu pulo).
--- (o subir/descer é o do Float, na mesma velocidade da subida gradual do TP ajuda)
-local RISE_STUDS = 10          -- quanto sobe no final
-local RISE_SPEED = FLOAT_SPEED -- studs por segundo (mesma do subir/descer do Float)
-local BELOW_OFFSET = 6         -- do centro dele até o meu centro, em pé (a minha cabeça fica logo abaixo dos pés dele)
-local FEET_OFFSET = 3.5        -- do meu centro até o centro da plataforma do float (o topo fica nos meus pés)
-local helpBusy = false
-local helpLock = nil           -- { conn, bv, bg } enquanto estou travado na vertical
-local helpApfPending = false   -- o Anti Part Fling estava ligado e volta quando eu terminar
+-- ===== AJUDAR (deitado, só na vertical, segue o jogador selecionado) =====
+-- Ligado: fico em estado de "fly" (corpo duro e reto), SEMPRE deitado de barriga para cima, embaixo
+-- dos pés do jogador selecionado. Eu só me movo na vertical, com os mesmos botões do Float
+-- (subir/descer e as teclas E/Q). Na horizontal eu sigo o jogador selecionado, para ele não cair.
+-- Desligado (ou se eu morrer, ou se o jogador sair): levanto em pé onde estou.
+local LIE_OFFSET = 3.5       -- do centro dele até o meu centro deitado (aumente se ele afundar, diminua se ficar alto)
+local FOLLOW_GAIN = 25       -- quão rápido acompanho o jogador na horizontal (maior = mais colado)
+local FOLLOW_MAX = 60        -- velocidade máxima desse acompanhamento (studs por segundo)
+local FOLLOW_SNAP = 40       -- se ele ficar mais longe que isso (ex.: se teleportou), vou direto para baixo dele
+local helpOn = false
+local helpState = nil        -- { bv, bg, hum, conn, yaw } enquanto o ajudar está ligado
+local helpApfPending = false -- o Anti Part Fling estava ligado e volta quando eu terminar
 
 local function targetRoot()
 	local ch = selectedPlayer and selectedPlayer.Character
@@ -1584,17 +1829,7 @@ local function myRoot()
 	return player.Character and player.Character:FindFirstChild("HumanoidRootPart")
 end
 
--- solta a trava vertical (heartbeat de travamento, BodyVelocity e BodyGyro)
-local function releaseHelpLock()
-	if helpLock then
-		if helpLock.conn then helpLock.conn:Disconnect() end
-		if helpLock.bv then helpLock.bv:Destroy() end
-		if helpLock.bg then helpLock.bg:Destroy() end
-		helpLock = nil
-	end
-end
-
--- religa o Anti Part Fling (se ele estava ligado antes do TP ajuda)
+-- religa o Anti Part Fling (se ele estava ligado antes do ajudar)
 local function resumeApfAfterHelp()
 	if helpApfPending then
 		helpApfPending = false
@@ -1602,12 +1837,41 @@ local function resumeApfAfterHelp()
 	end
 end
 
-local function runTpHelp()
-	if helpBusy then return end
+local function stopHelp()
+	if not helpOn then return end
+	helpOn = false
+	local s = helpState
+	helpState = nil
+	if s then
+		if s.conn then s.conn:Disconnect() end
+		if s.bv then s.bv:Destroy() end
+		if s.bg then s.bg:Destroy() end
+	end
+	noclip(false)
+
+	-- levanta: de pé de novo, onde estou
+	local r = myRoot()
+	if r and s then
+		r.CFrame = CFrame.new(r.Position + Vector3.new(0, 2.5, 0)) * CFrame.Angles(0, s.yaw, 0)
+		r.AssemblyLinearVelocity = Vector3.zero
+		r.AssemblyAngularVelocity = Vector3.zero
+	end
+	if s and s.hum and s.hum.Parent then
+		s.hum.PlatformStand = false
+		s.hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+	end
+
+	resumeApfAfterHelp()
+	helpBtn.setOn(false)
+	helpBtn.face.Text = "ajudar"
+end
+
+local function startHelp()
+	if helpOn then return end
 	if not targetRoot() then
 		helpBtn.face.Text = "Selecione um jogador"
 		task.delay(1.5, function()
-			helpBtn.face.Text = "tp ajuda"
+			if not helpOn then helpBtn.face.Text = "ajudar" end
 		end)
 		return
 	end
@@ -1617,110 +1881,88 @@ local function runTpHelp()
 	local mine = myRoot()
 	if not hum or not mine then return end
 
-	helpBusy = true
-	helpBtn.face.Text = "Ajudando..."
-	releaseHelpLock() -- caso eu ainda esteja travado de um TP anterior
-	-- o Anti Part Fling tira a colisão e me derrubaria da plataforma:
-	-- pausa agora e religa quando eu terminar
+	helpOn = true
+	helpBtn.setOn(true)
+
+	-- o ajudar tem o próprio voo: desliga Fly, VFly e Float (que usariam os mesmos botões)
+	toggles.Fly(false)
+	toggles.VFly(false)
+	toggles.Float(false)
+	-- o Anti Part Fling tem teto de altura e trava de posição: pausa agora e religa no fim
 	if apfActive then
 		helpApfPending = true
 		toggles["Anti Part Fling"](false)
 	end
-	if conns.helpJump then conns.helpJump:Disconnect() conns.helpJump = nil end
 
-	-- em pé, olhando para onde eu estava olhando
+	-- deitado de barriga para cima, mantendo para onde eu estava olhando
 	local look = mine.CFrame.LookVector
 	local yaw = math.atan2(-look.X, -look.Z)
-	local standRot = CFrame.Angles(0, yaw, 0)
+	local lieRot = CFrame.Angles(0, yaw, 0) * CFrame.Angles(math.rad(90), 0, 0)
 
-	local bv, bg, lockConn
-	local lockX, lockZ = mine.Position.X, mine.Position.Z
-	local ok = pcall(function()
-		-- 1) "fly": segura no ar e mantém em pé (o fly normal alinharia com a câmera)
-		bv = Instance.new("BodyVelocity")
-		bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
-		bv.Velocity = Vector3.zero
-		bv.Parent = mine
-		bg = Instance.new("BodyGyro")
-		bg.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
-		bg.P = 9e4
-		bg.CFrame = standRot
-		bg.Parent = mine
-		helpLock = { bv = bv, bg = bg }
+	-- estado de fly: corpo duro e reto
+	hum.PlatformStand = true
+	noclip(true)
 
-		-- trava: só me movo na vertical (X e Z fixos; o giro fica por conta do BodyGyro)
-		lockConn = RunService.Heartbeat:Connect(function()
-			local r = myRoot()
-			if not r or player.Character ~= char then -- morri ou troquei de personagem
-				releaseHelpLock()
-				resumeApfAfterHelp()
-				return
-			end
-			local pos = r.Position
-			if math.abs(pos.X - lockX) > 0.02 or math.abs(pos.Z - lockZ) > 0.02 then
-				r.CFrame = CFrame.new(lockX, pos.Y, lockZ) * r.CFrame.Rotation
-			end
-			local v = r.AssemblyLinearVelocity
-			if v.X ~= 0 or v.Z ~= 0 then
-				r.AssemblyLinearVelocity = Vector3.new(0, v.Y, 0)
-			end
-		end)
-		helpLock.conn = lockConn
+	local bv = Instance.new("BodyVelocity")
+	bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+	bv.Velocity = Vector3.zero
+	bv.Parent = mine
 
-		-- 2) noclip
-		noclip(true)
+	local bg = Instance.new("BodyGyro")
+	bg.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
+	bg.P = 9e4
+	bg.CFrame = lieRot -- sempre deitado
+	bg.Parent = mine
 
-		-- 3) TP exatamente abaixo do jogador (a trava passa a valer neste ponto)
-		local theirs = targetRoot()
-		local p = theirs.Position
-		lockX, lockZ = p.X, p.Z
-		mine.CFrame = CFrame.new(p.X, p.Y - BELOW_OFFSET, p.Z) * standRot
-		mine.AssemblyLinearVelocity = Vector3.zero
-		mine.AssemblyAngularVelocity = Vector3.zero
-		task.wait(0.05)
+	-- vai para baixo dos pés do jogador selecionado
+	local tp = targetRoot().Position
+	mine.CFrame = CFrame.new(tp.X, tp.Y - LIE_OFFSET, tp.Z) * lieRot
+	mine.AssemblyLinearVelocity = Vector3.zero
+	mine.AssemblyAngularVelocity = Vector3.zero
 
-		-- 4) plataforma do float sob os meus pés
-		toggles.Float(true)
-		floatY = mine.Position.Y - FEET_OFFSET
-
-		-- 5) sobe 10 studs aos poucos
-		bv.Velocity = Vector3.new(0, RISE_SPEED, 0)
-		local risen = 0
-		while risen < RISE_STUDS and mine.Parent do
-			local dt = RunService.Heartbeat:Wait()
-			risen += RISE_SPEED * dt
-			floatY = mine.Position.Y - FEET_OFFSET
+	helpState = { bv = bv, bg = bg, hum = hum, yaw = yaw }
+	helpState.conn = RunService.Heartbeat:Connect(function()
+		local r = myRoot()
+		if not r or player.Character ~= char or hum.Health <= 0 then
+			stopHelp() -- morri ou troquei de personagem
+			return
 		end
-		bv.Velocity = Vector3.zero
-		floatY = mine.Position.Y - FEET_OFFSET
-		task.wait(0.1)
+		if not selectedPlayer then
+			stopHelp() -- o jogador saiu do servidor
+			return
+		end
+		hum.PlatformStand = true
+
+		-- vertical: os mesmos botões do Float (subir/descer) e as teclas E/Q
+		local vy = 0
+		if floatUp or UIS:IsKeyDown(Enum.KeyCode.E) then vy += FLOAT_SPEED end
+		if floatDown or UIS:IsKeyDown(Enum.KeyCode.Q) then vy -= FLOAT_SPEED end
+
+		-- horizontal: acompanho o jogador selecionado (fico sempre embaixo dos pés dele)
+		local vx, vz = 0, 0
+		local t = targetRoot()
+		if t then
+			local pos, tpos = r.Position, t.Position
+			local ex, ez = tpos.X - pos.X, tpos.Z - pos.Z
+			if ex * ex + ez * ez > FOLLOW_SNAP * FOLLOW_SNAP then
+				r.CFrame = CFrame.new(tpos.X, pos.Y, tpos.Z) * lieRot
+			else
+				vx, vz = ex * FOLLOW_GAIN, ez * FOLLOW_GAIN
+				local mag = math.sqrt(vx * vx + vz * vz)
+				if mag > FOLLOW_MAX then
+					vx, vz = vx / mag * FOLLOW_MAX, vz / mag * FOLLOW_MAX
+				end
+			end
+		end
+		bv.Velocity = Vector3.new(vx, vy, vz)
 	end)
 
-	-- 6) desliga o noclip (sempre, mesmo se algo falhou)
-	noclip(false)
-	task.wait(0.1)
-	if ok and bv and bv.Parent then
-		-- libera só a vertical (a plataforma do float me segura); X e Z continuam travados
-		bv.MaxForce = Vector3.new(9e9, 0, 9e9)
-		bv.Velocity = Vector3.zero
-	else
-		-- algo falhou: solta tudo
-		releaseHelpLock()
-		resumeApfAfterHelp()
-	end
-
-	-- 7) continuo em pé na plataforma, travado na vertical, até eu pular
-	conns.helpJump = UIS.JumpRequest:Connect(function()
-		if conns.helpJump then conns.helpJump:Disconnect() conns.helpJump = nil end
-		releaseHelpLock() -- solta a trava vertical
-		resumeApfAfterHelp()
-	end)
-
-	helpBusy = false
-	helpBtn.face.Text = "tp ajuda"
+	helpBtn.face.Text = "ajudar"
 end
 
-helpBtn.face.Activated:Connect(runTpHelp)
+helpBtn.face.Activated:Connect(function()
+	if helpOn then stopHelp() else startHelp() end
+end)
 
 -- ===== REJOIN / SERVER HOP (botões) =====
 rejoinBtn.face.Activated:Connect(function()
@@ -1794,6 +2036,14 @@ task.spawn(function()
 			toggles.AntiFling(true)
 		end
 	end
+end)
+
+-- ===== MOVER PARTES (botão) =====
+local partsOn = false
+partsBtn.face.Activated:Connect(function()
+	partsOn = not partsOn
+	partTool(partsOn)
+	partsBtn.setOn(partsOn)
 end)
 
 -- ===== ABRIR / FECHAR O PAINEL (com animação) =====
