@@ -943,12 +943,12 @@ end
 local options = {
 	{ name = "AntiFling", fn = antiFling },
 	{ name = "Anti Part Fling", fn = antiPartFling },
-	{ name = "Airbag", fn = airbag },
 	{ name = "TPTool",    fn = tpTool },
 	{ name = "VFly",      fn = vfly },
 	{ name = "Fly",       fn = fly },
 	{ name = "FPS",       fn = fpsBoost },
 	{ name = "Float",     fn = floatToggle },
+	{ name = "Airbag", fn = airbag },
 }
 
 -- ===== QUAL VERSÃO RODA: DARK PARA TODOS, ROMÂNTICA SÓ PARA OS USUÁRIOS DA LISTA =====
@@ -1396,7 +1396,8 @@ local ROW_REJOIN = #options + 6
 local ROW_HOP = #options + 7
 local ROW_SETPOS = #options + 8
 local ROW_FARM = #options + 9
-local CONTENT_H = rowY(ROW_FARM) + ROW_H + 6 -- altura total do conteúdo rolável
+local ROW_TELE = #options + 10
+local CONTENT_H = rowY(ROW_TELE) + ROW_H + 6 -- altura total do conteúdo rolável
 
 local panel = Instance.new("Frame")
 panel.Size = UDim2.fromOffset(PANEL_W, PANEL_H)
@@ -1623,161 +1624,158 @@ end)
 refreshList()
 
 -- ===== LOCK IN AJUDA (botão on/off) =====
--- Ligado: fico em pé, embaixo do jogador selecionado, com a plataforma do Float sob os pés.
--- Subo gradualmente até o topo da minha cabeça alcançar os pés dele (ou 10 studs, o que vier antes).
--- Só a cabeça tem colisão, então ele fica em pé em cima dela. O resto do corpo continua sem colisão,
--- para o chão não me empurrar para fora a cada frame.
--- Enquanto ligado, sou teleportado para baixo dele a cada frame, acompanhando os movimentos dele,
--- para ele não cair de mim.
-local LOCK_HEAD_OFFSET = 3     -- do centro do meu corpo (HumanoidRootPart) até o topo da cabeça
-local LOCK_UNDER_DEPTH = 4     -- quanto começo abaixo do chão, de onde subo
-local RISE_STUDS = 10          -- subida máxima
-local RISE_SPEED = FLOAT_SPEED -- studs por segundo (mesma do subir/descer do Float)
-local FOLLOW_LEAD = 0.03       -- segundos fixos de antecipação ao seguir o jogador
-local FOLLOW_PING_FACTOR = 0.5 -- quanto do seu ping entra na antecipação (0 = ignora o ping)
-local MAX_LEAD_STUDS = 3       -- distância máxima à frente dele (aumente se ele escorregar)
+-- Ligado: vou para debaixo do jogador selecionado, com noclip e uma plataforma sob os pés (igual ao Float).
+-- A plataforma sobe LOCK_RISE_STUDS gradualmente. Quando termina, o noclip desliga e eu controlo a
+-- plataforma como o Float (Q desce / E sobe). Enquanto ligado, sou teleportado para baixo dele a cada
+-- frame, acompanhando os movimentos, para ele não cair de mim.
+do
+	local LOCK_RISE_STUDS = 7      -- quanto a plataforma sobe no começo
+	local LOCK_HEAD_OFFSET = 3     -- do centro do meu corpo até o topo da cabeça
+	local FOLLOW_LEAD = 0.03       -- segundos fixos de antecipação ao seguir o jogador
+	local FOLLOW_PING_FACTOR = 0.5 -- quanto do ping entra na antecipação
+	local MAX_LEAD_STUDS = 3       -- distância máxima à frente dele
 
-local lockOn = false
-local lockConn = nil
-local lockChar, lockVictim
-local lockYaw = 0
-local lockGroundY = 0          -- altura dos pés dele (o chão onde ele está)
-local lockSaved = {}           -- [parte] = CanCollide original
-local lockFloatWasOn = false
-local lockApfPending = false
+	local lockOn = false
+	local lockConn = nil
+	local lockChar, lockVictim
+	local lockGroundY = 0          -- altura dos pés dele (o chão onde ele está)
+	local lockRising = false
+	local lockRisen = 0
+	local lockYaw = 0
+	local lockSaved = {}           -- [parte] = CanCollide original
+	local lockFloatWasOn = false
+	local lockApfPending = false
 
-local function myRoot()
-	return player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-end
+	local function myRoot()
+		return player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+	end
 
--- altura dos pés até o centro do HumanoidRootPart
-local function feetOffset(hum, root)
-	return (hum.RigType == Enum.HumanoidRigType.R15) and (hum.HipHeight + root.Size.Y / 2) or 3
-end
+	-- altura dos pés até o centro do HumanoidRootPart
+	local function feetOffset(hum, root)
+		return (hum.RigType == Enum.HumanoidRigType.R15) and (hum.HipHeight + root.Size.Y / 2) or 3
+	end
 
--- headOn = true: só a cabeça tem colisão; false: nenhuma parte do corpo tem
-local function setBodyCollide(char, headOn)
-	for _, part in ipairs(char:GetDescendants()) do
-		if part:IsA("BasePart") then
-			if lockSaved[part] == nil then lockSaved[part] = part.CanCollide end
-			part.CanCollide = headOn and part.Name == "Head"
+	local function setBodyCollide(char, on)
+		for _, part in ipairs(char:GetDescendants()) do
+			if part:IsA("BasePart") then
+				if lockSaved[part] == nil then lockSaved[part] = part.CanCollide end
+				part.CanCollide = on
+			end
 		end
 	end
-end
 
-local function restoreCollide()
-	for part, cc in pairs(lockSaved) do
-		if part.Parent then part.CanCollide = cc end
-		lockSaved[part] = nil
-	end
-end
-
-local function lockStop()
-	if not lockOn then return end
-	lockOn = false
-	if lockConn then lockConn:Disconnect() lockConn = nil end
-
-	-- se eu estiver abaixo do chão, subo antes de tirar a plataforma
-	local r = myRoot()
-	if r and r.Position.Y < lockGroundY + 1 then
-		r.CFrame = CFrame.new(r.Position.X, lockGroundY + 3.5, r.Position.Z) * CFrame.Angles(0, lockYaw, 0)
-		r.AssemblyLinearVelocity = Vector3.zero
-	end
-	restoreCollide()
-	if not lockFloatWasOn then toggles.Float(false) end
-	if lockApfPending then
-		lockApfPending = false
-		toggles["Anti Part Fling"](true)
-	end
-	helpBtn.setOn(false)
-	helpBtn.face.Text = "lock in ajuda"
-end
-
-local function lockStart()
-	local char = player.Character
-	local hum = char and char:FindFirstChildOfClass("Humanoid")
-	local mine = myRoot()
-	local victim = selectedPlayer
-	local vch = victim and victim.Character
-	local vhrp = vch and vch:FindFirstChild("HumanoidRootPart")
-	local vhum = vch and vch:FindFirstChildOfClass("Humanoid")
-	if not (hum and mine and vhrp and vhum) then
-		helpBtn.face.Text = "Selecione um jogador"
-		task.delay(1.5, function()
-			if not lockOn then helpBtn.face.Text = "lock in ajuda" end
-		end)
-		return
+	local function restoreCollide()
+		for part, cc in pairs(lockSaved) do
+			if part.Parent then part.CanCollide = cc end
+			lockSaved[part] = nil
+		end
 	end
 
-	lockOn = true
-	lockChar, lockVictim = char, victim
-	lockYaw = math.atan2(-mine.CFrame.LookVector.X, -mine.CFrame.LookVector.Z)
-	lockGroundY = vhrp.Position.Y - feetOffset(vhum, vhrp)
-	helpBtn.setOn(true)
-	helpBtn.face.Text = "Subindo..."
+	local function lockStop()
+		if not lockOn then return end
+		lockOn = false
+		if lockConn then lockConn:Disconnect() lockConn = nil end
 
-	-- o Anti Part Fling tira a colisão do corpo e me derrubaria: pausa e religa no fim
-	if apfActive then
-		lockApfPending = true
-		toggles["Anti Part Fling"](false)
+		-- se eu estiver abaixo do chão, subo para cima do chão antes de qualquer coisa
+		local r = myRoot()
+		if r and r.Position.Y < lockGroundY + 1 then
+			r.CFrame = CFrame.new(r.Position.X, lockGroundY + 3, r.Position.Z) * CFrame.Angles(0, lockYaw, 0)
+			r.AssemblyLinearVelocity = Vector3.zero
+			if floatPart then floatY = lockGroundY - 0.5 end
+		end
+		restoreCollide()
+		if not lockFloatWasOn then toggles.Float(false) end
+		if lockApfPending then
+			lockApfPending = false
+			toggles["Anti Part Fling"](true)
+		end
+		helpBtn.setOn(false)
+		helpBtn.face.Text = "lock in ajuda"
 	end
-	lockFloatWasOn = floatPart ~= nil
-	toggles.Float(true)
 
-	-- começo abaixo do chão, sob o jogador, sem colisão
-	local rising = true
-	local curY = lockGroundY - LOCK_HEAD_OFFSET - LOCK_UNDER_DEPTH
-	local risen = 0
-	setBodyCollide(char, false)
-	mine.AssemblyLinearVelocity = Vector3.zero
-	mine.AssemblyAngularVelocity = Vector3.zero
-	mine.CFrame = CFrame.new(vhrp.Position.X, curY, vhrp.Position.Z) * CFrame.Angles(0, lockYaw, 0)
-	floatY = curY - 3.5
-
-	lockConn = RunService.Heartbeat:Connect(function(dt)
-		local ch = player.Character
-		local r = ch and ch:FindFirstChild("HumanoidRootPart")
-		local h = ch and ch:FindFirstChildOfClass("Humanoid")
-		local vc = victim.Character
-		local vr = vc and vc:FindFirstChild("HumanoidRootPart")
-		local vh = vc and vc:FindFirstChildOfClass("Humanoid")
-		if ch ~= lockChar or not r or not h or h.Health <= 0 or not vr or not vh then
-			lockStop()
+	local function lockStart()
+		local char = player.Character
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		local mine = myRoot()
+		local victim = selectedPlayer
+		local vch = victim and victim.Character
+		local vhrp = vch and vch:FindFirstChild("HumanoidRootPart")
+		local vhum = vch and vch:FindFirstChildOfClass("Humanoid")
+		if not (hum and mine and vhrp and vhum) then
+			helpBtn.face.Text = "Selecione um jogador"
+			task.delay(1.5, function()
+				if not lockOn then helpBtn.face.Text = "lock in ajuda" end
+			end)
 			return
 		end
 
-		if rising then
-			-- subida gradual até a cabeça alcançar os pés dele (ou o limite de studs)
-			local step = RISE_SPEED * dt
-			curY += step
-			risen += step
-			if curY + LOCK_HEAD_OFFSET >= lockGroundY or risen >= RISE_STUDS then
-				rising = false
-				setBodyCollide(ch, true) -- agora a cabeça tem colisão e ele pode ficar em pé nela
-				helpBtn.face.Text = "lock in ajuda"
-			end
-		else
-			-- depois de subir: fico na altura certa para ele continuar em pé em cima da minha cabeça
-			curY = vr.Position.Y - feetOffset(vh, vr) - LOCK_HEAD_OFFSET
+		lockOn = true
+		lockChar, lockVictim = char, victim
+		lockYaw = math.atan2(-mine.CFrame.LookVector.X, -mine.CFrame.LookVector.Z)
+		lockGroundY = vhrp.Position.Y - feetOffset(vhum, vhrp)
+		helpBtn.setOn(true)
+		helpBtn.face.Text = "Subindo..."
+
+		-- o Anti Part Fling tira a colisão do corpo e me derrubaria: pausa e religa no fim
+		if apfActive then
+			lockApfPending = true
+			toggles["Anti Part Fling"](false)
 		end
 
-		-- sigo o jogador (com antecipação do atraso de rede) para ele nunca sair de cima de mim
-		local tv = vr.AssemblyLinearVelocity
-		local lead = math.clamp(player:GetNetworkPing() * FOLLOW_PING_FACTOR + FOLLOW_LEAD, 0, 0.35)
-		local ahead = Vector3.new(tv.X, 0, tv.Z) * lead
-		if ahead.Magnitude > MAX_LEAD_STUDS then ahead = ahead.Unit * MAX_LEAD_STUDS end
+		-- plataforma do Float: começa 7 studs abaixo de onde termina (cabeça no nível dos pés dele)
+		lockFloatWasOn = floatPart ~= nil
+		toggles.Float(true)
+		local endFloatY = lockGroundY - LOCK_HEAD_OFFSET - 3.5
+		floatY = endFloatY - LOCK_RISE_STUDS
+		lockRising, lockRisen = true, 0
 
-		r.CFrame = CFrame.new(vr.Position.X + ahead.X, curY, vr.Position.Z + ahead.Z) * CFrame.Angles(0, lockYaw, 0)
-		r.AssemblyLinearVelocity = Vector3.zero
-		r.AssemblyAngularVelocity = Vector3.zero
-		h.PlatformStand = false
-		if floatPart then floatY = curY - 3.5 end -- plataforma do Float sob os pés
+		-- teleporta para debaixo dele, sem colisão
+		setBodyCollide(char, false)
+		mine.AssemblyLinearVelocity = Vector3.zero
+		mine.AssemblyAngularVelocity = Vector3.zero
+		mine.CFrame = CFrame.new(vhrp.Position.X, floatY + 3.5, vhrp.Position.Z) * CFrame.Angles(0, lockYaw, 0)
+
+		lockConn = RunService.Heartbeat:Connect(function(dt)
+			local ch = player.Character
+			local r = ch and ch:FindFirstChild("HumanoidRootPart")
+			local h = ch and ch:FindFirstChildOfClass("Humanoid")
+			local vc = victim.Character
+			local vr = vc and vc:FindFirstChild("HumanoidRootPart")
+			if ch ~= lockChar or not r or not h or h.Health <= 0 or not vr then
+				lockStop()
+				return
+			end
+
+			-- sobe a plataforma gradualmente (7 studs)
+			if lockRising then
+				local step = FLOAT_SPEED * dt
+				floatY += step
+				lockRisen += step
+				if lockRisen >= LOCK_RISE_STUDS then
+					lockRising = false
+					setBodyCollide(ch, true) -- noclip desligado: agora eu controlo a plataforma como o Float
+					helpBtn.face.Text = "lock in ajuda"
+				end
+			end
+
+			-- constantemente debaixo do jogador, com a antecipação do atraso de rede
+			local tv = vr.AssemblyLinearVelocity
+			local lead = math.clamp(player:GetNetworkPing() * FOLLOW_PING_FACTOR + FOLLOW_LEAD, 0, 0.35)
+			local ahead = Vector3.new(tv.X, 0, tv.Z) * lead
+			if ahead.Magnitude > MAX_LEAD_STUDS then ahead = ahead.Unit * MAX_LEAD_STUDS end
+
+			h.PlatformStand = false
+			r.CFrame = CFrame.new(vr.Position.X + ahead.X, floatY + 3.5, vr.Position.Z + ahead.Z)
+				* CFrame.Angles(0, lockYaw, 0)
+			r.AssemblyLinearVelocity = Vector3.zero
+			r.AssemblyAngularVelocity = Vector3.zero
+		end)
+	end
+
+	helpBtn.face.Activated:Connect(function()
+		if lockOn then lockStop() else lockStart() end
 	end)
 end
-
-helpBtn.face.Activated:Connect(function()
-	if lockOn then lockStop() else lockStart() end
-end)
 
 -- ===== REJOIN / SERVER HOP (botões) =====
 rejoinBtn.face.Activated:Connect(function()
@@ -1854,9 +1852,278 @@ task.spawn(function()
 end)
 
 -- ===== ABRIR / FECHAR O PAINEL (com animação) =====
+local closeTele
+-- ===== TELECINESE (mini menu ao lado do menu principal) =====
+-- Toque numa parte do mapa com o menu aberto para selecioná-la. Partes ancoradas são recusadas.
+-- Rotacionar: gira 90° em torno do eixo vertical. Girar: gira a parte sem parar.
+-- Controlar: move a parte com a câmera como referência (andar com o analógico/WASD, Q/E ou os botões
+-- subir/descer do Float para cima e para baixo); a rotação que ela tem é mantida.
+-- Velocidade: arraste a barra para escolher.
+closeTele = function() end -- redefinido abaixo; o menu principal chama ao fechar
+do
+	local TELE_H = 226
+	local SPEED_MIN, SPEED_MAX = 10, 200
+	local SPIN_RATE = 3 -- rad/s do "girar"
+	local RED = Color3.fromRGB(255, 110, 110)
+
+	local teleOpen = false
+	local tele = { part = nil, box = nil, spinOn = false, ctrlOn = false, bv = nil, bg = nil, rot = nil, speed = 60, dragging = false }
+	local telePanel, teleStatus, teleBtn, teleSpinBtn, teleCtrlBtn, teleSpeedLabel, teleTrack, teleKnob
+
+	local function teleSetStatus(text, color)
+		teleStatus.Text = text
+		teleStatus.TextColor3 = color or T.text
+	end
+
+	local function teleStopControl()
+		tele.ctrlOn = false
+		if tele.bv then tele.bv:Destroy() tele.bv = nil end
+		if tele.bg then tele.bg:Destroy() tele.bg = nil end
+		teleCtrlBtn.setOn(false)
+	end
+
+	local function teleStopSpin()
+		tele.spinOn = false
+		if tele.part and tele.part.Parent then tele.part.AssemblyAngularVelocity = Vector3.zero end
+		teleSpinBtn.setOn(false)
+	end
+
+	local function teleClear()
+		teleStopControl()
+		teleStopSpin()
+		if tele.box then tele.box:Destroy() tele.box = nil end
+		tele.part = nil
+	end
+
+	local function teleSelect(part)
+		if part.Anchored then
+			teleSetStatus("Essa parte está ancorada. Escolha outra.", RED)
+			return
+		end
+		teleClear()
+		tele.part = part
+		tele.box = Instance.new("SelectionBox")
+		tele.box.Adornee = part
+		tele.box.LineThickness = 0.05
+		tele.box.Color3 = Color3.fromRGB(255, 80, 120)
+		tele.box.Parent = workspace
+		teleSetStatus("Selecionada: " .. part.Name)
+	end
+
+	local function teleRotate()
+		local p = tele.part
+		if not p then
+			teleSetStatus("Selecione uma parte primeiro.", RED)
+			return
+		end
+		p.CFrame = p.CFrame * CFrame.Angles(0, math.rad(90), 0)
+		if tele.ctrlOn then tele.rot = p.CFrame.Rotation end
+	end
+
+	local function teleStartControl()
+		local p = tele.part
+		if not p then
+			teleSetStatus("Selecione uma parte primeiro.", RED)
+			return
+		end
+		teleStopSpin() -- girar e controlar não rodam juntos
+		tele.rot = p.CFrame.Rotation -- a rotação que ela tem agora é a que eu controlo
+		tele.bv = Instance.new("BodyVelocity")
+		tele.bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+		tele.bv.Velocity = Vector3.zero
+		tele.bv.Parent = p
+		tele.bg = Instance.new("BodyGyro")
+		tele.bg.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
+		tele.bg.P = 9e4
+		tele.bg.CFrame = tele.rot
+		tele.bg.Parent = p
+		tele.ctrlOn = true
+		teleCtrlBtn.setOn(true)
+	end
+
+	local function setSpeedFromX(x)
+		local a = math.clamp((x - teleTrack.AbsolutePosition.X) / teleTrack.AbsoluteSize.X, 0, 1)
+		tele.speed = math.floor(SPEED_MIN + a * (SPEED_MAX - SPEED_MIN) + 0.5)
+		teleKnob.Position = UDim2.new(a, -8, 0.5, -8)
+		teleSpeedLabel.Text = "Velocidade: " .. tele.speed
+	end
+
+	local function setTele(open)
+		teleOpen = open
+		telePanel.Visible = open
+		teleBtn.setOn(open)
+		if open then
+			teleSetStatus("Toque numa parte para selecionar.")
+		else
+			teleClear()
+		end
+	end
+	closeTele = function()
+		if teleOpen then setTele(false) end
+	end
+
+	-- painel ao lado do menu principal
+	telePanel = Instance.new("Frame")
+	telePanel.Size = UDim2.fromOffset(PANEL_W, TELE_H)
+	telePanel.Position = UDim2.fromOffset(PANEL_W + 8, BUBBLE_H + 8)
+	telePanel.Active = true
+	telePanel.Visible = false
+	telePanel.Parent = bubble
+	Instance.new("UICorner", telePanel).CornerRadius = UDim.new(0, 14)
+	addGradient(telePanel)
+
+	teleStatus = Instance.new("TextLabel")
+	teleStatus.Size = UDim2.new(1, -16, 0, 34)
+	teleStatus.Position = UDim2.fromOffset(8, 6)
+	teleStatus.BackgroundTransparency = 1
+	teleStatus.Font = T.font
+	teleStatus.TextSize = 13
+	teleStatus.TextWrapped = true
+	teleStatus.TextColor3 = T.text
+	teleStatus.Text = "Toque numa parte para selecionar."
+	teleStatus.Parent = telePanel
+
+	local rotBtn = new3DButton(telePanel, "Rotacionar", UDim2.fromOffset(8, 44), UDim2.new(1, -16, 0, ROW_H), T.faceOff, T.baseOff)
+	rotBtn.face.Activated:Connect(teleRotate)
+
+	teleSpinBtn = new3DButton(telePanel, "Girar", UDim2.fromOffset(8, 84), UDim2.new(1, -16, 0, ROW_H), T.faceOff, T.baseOff)
+	teleSpinBtn.face.Activated:Connect(function()
+		if not tele.part then
+			teleSetStatus("Selecione uma parte primeiro.", RED)
+			return
+		end
+		if tele.spinOn then
+			teleStopSpin()
+		else
+			if tele.ctrlOn then teleStopControl() end
+			tele.spinOn = true
+			teleSpinBtn.setOn(true)
+		end
+	end)
+
+	teleCtrlBtn = new3DButton(telePanel, "Controlar", UDim2.fromOffset(8, 124), UDim2.new(1, -16, 0, ROW_H), T.faceOff, T.baseOff)
+	teleCtrlBtn.face.Activated:Connect(function()
+		if tele.ctrlOn then
+			teleStopControl()
+		else
+			teleStartControl()
+		end
+	end)
+
+	teleSpeedLabel = Instance.new("TextLabel")
+	teleSpeedLabel.Size = UDim2.new(1, -16, 0, 18)
+	teleSpeedLabel.Position = UDim2.fromOffset(8, 164)
+	teleSpeedLabel.BackgroundTransparency = 1
+	teleSpeedLabel.Font = T.font
+	teleSpeedLabel.TextSize = 13
+	teleSpeedLabel.TextColor3 = T.text
+	teleSpeedLabel.TextXAlignment = Enum.TextXAlignment.Left
+	teleSpeedLabel.Parent = telePanel
+
+	teleTrack = Instance.new("Frame")
+	teleTrack.Size = UDim2.new(1, -16, 0, 24)
+	teleTrack.Position = UDim2.fromOffset(8, 186)
+	teleTrack.BackgroundTransparency = 1
+	teleTrack.Active = true
+	teleTrack.Parent = telePanel
+
+	local bar = Instance.new("Frame")
+	bar.Size = UDim2.new(1, 0, 0, 6)
+	bar.Position = UDim2.new(0, 0, 0.5, -3)
+	bar.BackgroundColor3 = T.baseOff
+	bar.BorderSizePixel = 0
+	bar.Parent = teleTrack
+	Instance.new("UICorner", bar).CornerRadius = UDim.new(1, 0)
+
+	teleKnob = Instance.new("Frame")
+	teleKnob.Size = UDim2.fromOffset(16, 16)
+	teleKnob.BackgroundColor3 = T.faceHelp
+	teleKnob.BorderSizePixel = 0
+	teleKnob.Parent = teleTrack
+	Instance.new("UICorner", teleKnob).CornerRadius = UDim.new(1, 0)
+
+	local function speedDragStart(input)
+		if isPress(input) then
+			tele.dragging = true
+			setSpeedFromX(input.Position.X)
+		end
+	end
+	teleTrack.InputBegan:Connect(speedDragStart)
+	teleKnob.InputBegan:Connect(speedDragStart)
+	local a0 = (tele.speed - SPEED_MIN) / (SPEED_MAX - SPEED_MIN)
+	teleKnob.Position = UDim2.new(a0, -8, 0.5, -8)
+	teleSpeedLabel.Text = "Velocidade: " .. tele.speed
+
+	UIS.InputChanged:Connect(function(input)
+		if tele.dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+			setSpeedFromX(input.Position.X)
+		end
+	end)
+	UIS.InputEnded:Connect(function(input)
+		if isPress(input) then tele.dragging = false end
+	end)
+
+	teleBtn = new3DButton(content, "telecinese", UDim2.fromOffset(8, rowY(ROW_TELE)), UDim2.new(1, -16, 0, ROW_H), T.faceOff, T.baseOff)
+	teleBtn.face.TextTruncate = Enum.TextTruncate.AtEnd
+	teleBtn.face.Activated:Connect(function()
+		setTele(not teleOpen)
+	end)
+
+	-- seleção: toque/clique numa parte do mapa enquanto o menu está aberto
+	UIS.InputBegan:Connect(function(input, gp)
+		if gp or not teleOpen or not isPress(input) then return end
+		local cam = workspace.CurrentCamera
+		if not cam then return end
+		local ray = cam:ViewportPointToRay(input.Position.X, input.Position.Y)
+		local params = RaycastParams.new()
+		params.FilterType = Enum.RaycastFilterType.Exclude
+		local ex = {}
+		if player.Character then table.insert(ex, player.Character) end
+		if floatPart then table.insert(ex, floatPart) end
+		params.FilterDescendantsInstances = ex
+		local hit = workspace:Raycast(ray.Origin, ray.Direction * 1000, params)
+		if not hit then return end
+		local part = hit.Instance
+		local m = part:FindFirstAncestorOfClass("Model")
+		if m and m:FindFirstChildOfClass("Humanoid") then
+			teleSetStatus("Não dá para mover personagens.", RED)
+			return
+		end
+		teleSelect(part)
+	end)
+
+	-- girar e controlar (rodam a cada frame)
+	RunService.Heartbeat:Connect(function(dt)
+		local p = tele.part
+		if not p then return end
+		if not p.Parent then
+			teleClear()
+			teleSetStatus("A parte foi removida.", RED)
+			return
+		end
+		if tele.ctrlOn and tele.bv and tele.bg then
+			local cam = workspace.CurrentCamera
+			local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+			local rel = hum and cam.CFrame:VectorToObjectSpace(hum.MoveDirection) or Vector3.zero
+			local dir = cam.CFrame.LookVector * (-rel.Z) + cam.CFrame.RightVector * rel.X
+			if floatUp or UIS:IsKeyDown(Enum.KeyCode.E) or UIS:IsKeyDown(Enum.KeyCode.Space) then
+				dir += Vector3.new(0, 1, 0)
+			end
+			if floatDown or UIS:IsKeyDown(Enum.KeyCode.Q) then
+				dir -= Vector3.new(0, 1, 0)
+			end
+			tele.bv.Velocity = dir.Magnitude > 0.01 and dir.Unit * tele.speed or Vector3.zero
+			tele.bg.CFrame = tele.rot
+		elseif tele.spinOn then
+			p.AssemblyAngularVelocity = Vector3.new(0, SPIN_RATE, 0)
+		end
+	end)
+end
+
 local panelOpen = false
 local function setPanel(open)
 	panelOpen = open
+	if not open then closeTele() end
 	if not IS_ROMANTIC then
 		tween(bubble, 0.25, { BackgroundColor3 = open and T.bubbleBgOpen or T.bubbleBg })
 	end
