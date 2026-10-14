@@ -1275,15 +1275,18 @@ local function playIntro(onDone)
 	onDone()
 end
 
--- ===== MOVER PARTES (selecionar e arrastar com o dedo) =====
+-- ===== MOVER PARTES (selecionar e mandar a parte para onde eu tocar) =====
 -- Ligado: toque numa parte do mapa para selecionar (toque de novo para desselecionar).
 --   contorno VERMELHO = parte ancorada; contorno AZUL = parte solta (não ancorada).
--- Segure o dedo por 1 segundo numa parte para controlar: enquanto o dedo estiver na tela, a parte
--- segue o dedo (a distância da câmera é mantida e a câmera fica parada). Parte ancorada não dá
--- para controlar. Só move partes que o seu cliente consegue mover (ex.: as soltas perto de você).
+-- Segure o dedo por 1 segundo numa parte solta para CONTROLAR: depois disso, cada toque em qualquer
+-- lugar do mapa manda a parte para lá (ela mantém a rotação que tinha e fica parada no ponto).
+-- Tocar fora da parte NÃO desseleciona: o controle só termina quando você desliga o botão.
+-- Parte ancorada não dá para controlar. Só move partes que o seu cliente consegue mover
+-- (ex.: as soltas perto de você). Se a parte não chegar ao ponto, o contorno pisca vermelho.
 -- Partes de personagens de jogadores não são selecionáveis (só as do mapa).
 local PART_HOLD_TIME = 1       -- segundos segurando para controlar
-local PART_TAP_TOLERANCE = 12  -- pixels que o dedo pode mexer e ainda contar como "parado"
+local PART_TAP_TOLERANCE = 12  -- pixels que o dedo pode mexer e ainda contar como "toque"
+local PART_MOVE_SPEED = 100    -- studs por segundo até o ponto tocado
 local PART_RED = Color3.fromRGB(255, 60, 60)
 local PART_BLUE = Color3.fromRGB(70, 140, 255)
 
@@ -1291,8 +1294,8 @@ local partTool
 do
 	local on = false
 	local selected, highlight
-	local press -- { part, pos, input, token, held }
-	local grab  -- { part, att, ap, ao, dist, camType, input }
+	local press   -- { part, pos, input, token, held }
+	local control -- { part, att, ap, ao, token } enquanto estou controlando uma parte
 	local token = 0
 	local pointer = Vector2.zero
 	local connList = {}
@@ -1323,7 +1326,7 @@ do
 		return false
 	end
 
-	-- qual parte do mapa está sob o dedo
+	-- qual parte do mapa está sob o dedo (para selecionar)
 	local function pick(pos)
 		local cam = workspace.CurrentCamera
 		local ray = cam:ScreenPointToRay(pos.X, pos.Y)
@@ -1358,36 +1361,40 @@ do
 		highlight = hl
 	end
 
-	-- pisca o preenchimento da seleção (aviso rápido)
+	-- pisca o preenchimento da seleção (aviso rápido); depois volta ao normal
 	local function flash(color)
 		local hl = highlight
 		if not hl then return end
 		hl.FillColor = color
 		hl.FillTransparency = 0.5
 		task.delay(0.25, function()
-			if hl.Parent and not grab then hl.FillTransparency = 1 end
+			if hl.Parent then
+				hl.FillColor = PART_BLUE
+				hl.FillTransparency = control and 0.7 or 1 -- sob controle: fica com um leve preenchimento azul
+			end
 		end)
 	end
 
-	local function endGrab()
-		local g = grab
-		grab = nil
-		if not g then return end
-		if g.ap then g.ap:Destroy() end
-		if g.ao then g.ao:Destroy() end
-		if g.att then g.att:Destroy() end
-		local cam = workspace.CurrentCamera
-		if cam then cam.CameraType = g.camType end -- a câmera volta ao normal
+	local function endControl()
+		local c = control
+		control = nil
+		if not c then return end
+		if c.ap then c.ap:Destroy() end
+		if c.ao then c.ao:Destroy() end
+		if c.att then c.att:Destroy() end
 		if highlight then highlight.FillTransparency = 1 end
 	end
 
-	local function beginGrab(part, input)
-		if grab then return end
+	local function beginControl(part)
+		if control then return end
 		if isAnchored(part) then
 			flash(PART_RED) -- ancorada: não dá para controlar
 			return
 		end
-		local cam = workspace.CurrentCamera
+
+		-- tenta ficar com a física das partes soltas por perto (sem isso o servidor pode ficar com elas)
+		pcall(function() player.MaximumSimulationRadius = 1e9 end)
+		if sethiddenproperty then pcall(sethiddenproperty, player, "SimulationRadius", 1e9) end
 
 		local att = Instance.new("Attachment")
 		att.Parent = part
@@ -1397,12 +1404,12 @@ do
 		ap.Attachment0 = att
 		ap.RigidityEnabled = false
 		ap.MaxForce = math.huge
-		ap.MaxVelocity = math.huge
+		ap.MaxVelocity = PART_MOVE_SPEED
 		ap.Responsiveness = 40
-		ap.Position = part.Position
+		ap.Position = part.Position -- fica onde está até eu tocar em outro lugar
 		ap.Parent = part
 
-		-- mantém a parte sem girar enquanto eu a movo
+		-- mantém a rotação que a parte tem agora (se estiver deitada, continua deitada)
 		local ao = Instance.new("AlignOrientation")
 		ao.Mode = Enum.OrientationAlignmentMode.OneAttachment
 		ao.Attachment0 = att
@@ -1411,32 +1418,67 @@ do
 		ao.CFrame = part.CFrame.Rotation
 		ao.Parent = part
 
-		grab = {
-			part = part, att = att, ap = ap, ao = ao, input = input,
-			dist = (part.Position - cam.CFrame.Position).Magnitude,
-			camType = cam.CameraType,
-		}
-		cam.CameraType = Enum.CameraType.Scriptable -- trava a câmera enquanto arrasto
+		control = { part = part, att = att, ap = ap, ao = ao, token = 0 }
 		if highlight then
 			highlight.FillColor = PART_BLUE
 			highlight.FillTransparency = 0.7
 		end
 	end
 
-	-- a cada frame: atualiza a cor do contorno e leva a parte até o dedo
+	-- manda a parte controlada para o ponto do mapa tocado
+	local function moveControlled(pos)
+		local c = control
+		if not c or not c.part.Parent then return end
+		local part = c.part
+		local cam = workspace.CurrentCamera
+		local ray = cam:ScreenPointToRay(pos.X, pos.Y)
+
+		local params = RaycastParams.new()
+		params.FilterType = Enum.RaycastFilterType.Exclude
+		local ignore = { part }
+		for _, q in ipairs(part:GetConnectedParts(true)) do table.insert(ignore, q) end
+		if player.Character then table.insert(ignore, player.Character) end
+		if floatPart then table.insert(ignore, floatPart) end
+		params.FilterDescendantsInstances = ignore
+		local hit = workspace:Raycast(ray.Origin, ray.Direction * 1000, params)
+
+		local target
+		if hit then
+			-- fica apoiada na superfície tocada (considera o tamanho e a rotação da parte)
+			local n = hit.Normal
+			local cf, s = part.CFrame, part.Size
+			local ext = 0.5 * (math.abs(n:Dot(cf.RightVector)) * s.X
+				+ math.abs(n:Dot(cf.UpVector)) * s.Y
+				+ math.abs(n:Dot(cf.LookVector)) * s.Z)
+			target = hit.Position + n * (ext + 0.1)
+		else
+			-- tocou no céu: mantém a distância atual da câmera
+			target = ray.Origin + ray.Direction * (part.Position - ray.Origin).Magnitude
+		end
+
+		c.ap.Position = target
+		flash(PART_BLUE)
+
+		-- se a parte não chegar ao ponto, avisa piscando em vermelho
+		c.token += 1
+		local tk = c.token
+		local wait = (part.Position - target).Magnitude / PART_MOVE_SPEED + 1.2
+		task.delay(wait, function()
+			if control == c and c.token == tk and part.Parent and (part.Position - target).Magnitude > 6 then
+				flash(PART_RED)
+			end
+		end)
+	end
+
+	-- a cada frame: atualiza a cor do contorno e cuida de parte removida
 	local function step()
 		if selected then
 			if not selected.Parent then
-				endGrab()
+				endControl()
 				clearSelection()
 			elseif highlight then
 				highlight.OutlineColor = isAnchored(selected) and PART_RED or PART_BLUE
 			end
-		end
-		if grab then
-			local cam = workspace.CurrentCamera
-			local ray = cam:ScreenPointToRay(pointer.X, pointer.Y)
-			grab.ap.Position = ray.Origin + ray.Direction * grab.dist
 		end
 	end
 
@@ -1449,17 +1491,18 @@ do
 		pointer = pos
 		token += 1
 		local myToken = token
-		local part = pick(pos)
+		-- sem controle ativo: vê qual parte está sob o dedo (para selecionar ou segurar)
+		local part = (not control) and pick(pos) or nil
 		press = { part = part, pos = pos, input = input, held = false, token = myToken }
 
 		if part then
 			task.delay(PART_HOLD_TIME, function()
 				local p = press
-				if not on or not p or p.token ~= myToken or grab then return end
+				if not on or not p or p.token ~= myToken or control then return end
 				if (pointer - p.pos).Magnitude > PART_TAP_TOLERANCE then return end
-				p.held = true
+				p.held = true -- este toque foi o que iniciou o controle (não manda a parte para lugar nenhum)
 				if selected ~= part then selectPart(part) end
-				beginGrab(part, p.input)
+				beginControl(part)
 			end)
 		end
 	end
@@ -1468,8 +1511,7 @@ do
 		if input.UserInputType == Enum.UserInputType.MouseMovement then
 			pointer = Vector2.new(input.Position.X, input.Position.Y)
 		elseif input.UserInputType == Enum.UserInputType.Touch then
-			local owner = (grab and grab.input) or (press and press.input)
-			if owner == input then
+			if press and press.input == input then
 				pointer = Vector2.new(input.Position.X, input.Position.Y)
 			end
 		end
@@ -1478,22 +1520,19 @@ do
 	local function onEnded(input)
 		if not isPress(input) then return end
 		if input.UserInputType == Enum.UserInputType.Touch then
-			local owner = (grab and grab.input) or (press and press.input)
-			if owner and owner ~= input then return end -- outro dedo
+			if press and press.input ~= input then return end -- outro dedo
 		end
 		local p = press
 		press = nil
-		if grab then
-			endGrab() -- soltou o dedo: larga a parte
-			return
-		end
-		-- toque rápido: seleciona / desseleciona
-		if p and not p.held and (pointer - p.pos).Magnitude <= PART_TAP_TOLERANCE then
-			if p.part then
-				if selected == p.part then clearSelection() else selectPart(p.part) end
-			else
-				clearSelection()
-			end
+		if not p or p.held then return end
+		if (pointer - p.pos).Magnitude > PART_TAP_TOLERANCE then return end -- arrastou (mexeu a câmera)
+
+		if control then
+			moveControlled(p.pos) -- controlando: o toque manda a parte para lá (e nunca desseleciona)
+		elseif p.part then
+			if selected == p.part then clearSelection() else selectPart(p.part) end
+		else
+			clearSelection()
 		end
 	end
 
@@ -1508,7 +1547,7 @@ do
 		else
 			for _, c in ipairs(connList) do c:Disconnect() end
 			table.clear(connList)
-			endGrab()
+			endControl()
 			clearSelection()
 			press = nil
 		end
