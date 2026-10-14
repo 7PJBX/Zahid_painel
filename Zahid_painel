@@ -119,6 +119,8 @@ end)
 
 -- ===== FLY / VFLY =====
 local FLY_SPEED = 60
+local airbagOn = false  -- (botão Airbag) ligado: Fly e VFly aceleram e viram de forma suave
+local AIRBAG_SMOOTH = 8 -- quanto maior, mais rápida a resposta (8 = cerca de 0,12 s para acompanhar)
 
 local function stopFlight(key)
 	if conns[key] then conns[key]:Disconnect() conns[key] = nil end
@@ -134,7 +136,7 @@ end
 local function startFlight(key, needSeat)
 	stopFlight(key)
 	flyState[key] = { needSeat = needSeat }
-	conns[key] = RunService.Heartbeat:Connect(function()
+	conns[key] = RunService.Heartbeat:Connect(function(dt)
 		local s = flyState[key]
 		local char = player.Character
 		local hum = char and char:FindFirstChildOfClass("Humanoid")
@@ -167,6 +169,7 @@ local function startFlight(key, needSeat)
 			s.bg = Instance.new("BodyGyro")
 			s.bg.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
 			s.bg.P = 9e4
+			s.bg.CFrame = part.CFrame
 			s.bg.Parent = part
 			if not needSeat then hum.PlatformStand = true end
 		end
@@ -181,8 +184,15 @@ local function startFlight(key, needSeat)
 			dir -= Vector3.new(0, 1, 0)
 		end
 
-		s.bv.Velocity = dir * FLY_SPEED
-		s.bg.CFrame = cam.CFrame
+		if airbagOn then
+			-- Airbag: acelera e vira aos poucos (sem virada brusca)
+			local a = 1 - math.exp(-dt * AIRBAG_SMOOTH)
+			s.bv.Velocity = s.bv.Velocity:Lerp(dir * FLY_SPEED, a)
+			s.bg.CFrame = s.bg.CFrame:Lerp(cam.CFrame, a)
+		else
+			s.bv.Velocity = dir * FLY_SPEED
+			s.bg.CFrame = cam.CFrame
+		end
 	end)
 end
 
@@ -880,10 +890,60 @@ do
 	end
 end
 
+-- ===== AIRBAG (anti dano por giro, virada e parada bruscas) =====
+-- Enquanto ligado:
+--  * limita a velocidade de giro do personagem (ou do veículo em que estou sentado), para nada
+--    te fazer rodopiar a ponto de morrer quando o giro parar de repente;
+--  * Fly e VFly passam a acelerar e a virar de forma suave (sem a virada brusca que causa dano);
+--  * desliga a exigência de pescoço do Humanoid (RequiresNeck): se a física "quebrar" o pescoço,
+--    o personagem não morre por isso.
+-- Obs.: dano que o servidor do jogo aplica por conta própria (script que tira vida por velocidade
+-- ou por queda) não dá para impedir pelo client; o Airbag reduz as causas físicas.
+local airbag
+do
+	local MAX_SPIN = 15 -- rad/s: acima disso o giro é cortado (rodopio de fling passa de centenas)
+	local savedNeck = {} -- [humanoid] = RequiresNeck original
+
+	local function restoreNeck()
+		for h, v in pairs(savedNeck) do
+			if h.Parent then h.RequiresNeck = v end
+			savedNeck[h] = nil
+		end
+	end
+
+	airbag = function(on)
+		if conns.airbag then conns.airbag:Disconnect() conns.airbag = nil end
+		airbagOn = on
+		restoreNeck()
+		if not on then return end
+
+		conns.airbag = RunService.Heartbeat:Connect(function()
+			local char = player.Character
+			local hrp = char and char:FindFirstChild("HumanoidRootPart")
+			local hum = char and char:FindFirstChildOfClass("Humanoid")
+			if not hrp or not hum then return end
+
+			-- pescoço: não morre se a física "quebrar" o pescoço
+			if savedNeck[hum] == nil then
+				savedNeck[hum] = hum.RequiresNeck
+				hum.RequiresNeck = false
+			end
+
+			-- giro: limita (no veículo, vale para o veículo inteiro)
+			local root = hrp.AssemblyRootPart or hrp
+			local w = root.AssemblyAngularVelocity
+			if w.Magnitude > MAX_SPIN then
+				root.AssemblyAngularVelocity = w.Unit * MAX_SPIN
+			end
+		end)
+	end
+end
+
 -- ===== LISTA DE BOTÕES =====
 local options = {
 	{ name = "AntiFling", fn = antiFling },
 	{ name = "Anti Part Fling", fn = antiPartFling },
+	{ name = "Airbag", fn = airbag },
 	{ name = "TPTool",    fn = tpTool },
 	{ name = "VFly",      fn = vfly },
 	{ name = "Fly",       fn = fly },
@@ -1430,7 +1490,7 @@ local tpBtn = new3DButton(content, "TP até o jogador", UDim2.fromOffset(8, rowY
 	UDim2.new(1, -16, 0, ROW_H), T.faceTp, T.baseTp)
 tpBtn.face.TextTruncate = Enum.TextTruncate.AtEnd
 
-local helpBtn = new3DButton(content, "tp ajuda", UDim2.fromOffset(8, rowY(ROW_HELP)),
+local helpBtn = new3DButton(content, "lock in ajuda", UDim2.fromOffset(8, rowY(ROW_HELP)),
 	UDim2.new(1, -16, 0, ROW_H), T.faceHelp, T.baseHelp)
 helpBtn.face.TextTruncate = Enum.TextTruncate.AtEnd
 
@@ -1562,217 +1622,162 @@ end)
 
 refreshList()
 
--- ===== TP AJUDA (deitado) =====
--- trip (deitado) > "fly" que segura no ar > noclip > TP exatamente abaixo do jogador
--- (pés dele no meio do meu tronco) > sobe 10 studs aos poucos > noclip desliga
--- > fico deitado na plataforma do float até eu pular.
--- Depois do trip eu só me movo na vertical: nada nem ninguém me move para os lados.
--- Depois do TP, fico sendo teleportado o tempo todo para baixo do jogador (ele anda e não sai de cima de mim).
--- (o subir/descer é o do Float, na mesma velocidade da subida gradual do TP ajuda)
-local RISE_STUDS = 10          -- quanto sobe no final
+-- ===== LOCK IN AJUDA (botão on/off) =====
+-- Ligado: fico em pé, embaixo do jogador selecionado, com a plataforma do Float sob os pés.
+-- Subo gradualmente até o topo da minha cabeça alcançar os pés dele (ou 10 studs, o que vier antes).
+-- Só a cabeça tem colisão, então ele fica em pé em cima dela. O resto do corpo continua sem colisão,
+-- para o chão não me empurrar para fora a cada frame.
+-- Enquanto ligado, sou teleportado para baixo dele a cada frame, acompanhando os movimentos dele,
+-- para ele não cair de mim.
+local LOCK_HEAD_OFFSET = 3     -- do centro do meu corpo (HumanoidRootPart) até o topo da cabeça
+local LOCK_UNDER_DEPTH = 4     -- quanto começo abaixo do chão, de onde subo
+local RISE_STUDS = 10          -- subida máxima
 local RISE_SPEED = FLOAT_SPEED -- studs por segundo (mesma do subir/descer do Float)
-local LIE_OFFSET = 3.5         -- do centro dele até o meu centro deitado (aumente se ele afundar, diminua se ficar alto)
 local FOLLOW_LEAD = 0.03       -- segundos fixos de antecipação ao seguir o jogador
 local FOLLOW_PING_FACTOR = 0.5 -- quanto do seu ping entra na antecipação (0 = ignora o ping)
-local MAX_LEAD_STUDS = 3       -- distância máxima à frente dele (nunca fica longe demais; aumente se ele escorregar)
-local helpBusy = false
-local helpLock = nil           -- { conn, bv, bg } enquanto estou deitado e travado na vertical
-local helpApfPending = false   -- o Anti Part Fling estava ligado e volta quando eu levantar
+local MAX_LEAD_STUDS = 3       -- distância máxima à frente dele (aumente se ele escorregar)
 
-local function targetRoot()
-	local ch = selectedPlayer and selectedPlayer.Character
-	return ch and ch:FindFirstChild("HumanoidRootPart")
-end
+local lockOn = false
+local lockConn = nil
+local lockChar, lockVictim
+local lockYaw = 0
+local lockGroundY = 0          -- altura dos pés dele (o chão onde ele está)
+local lockSaved = {}           -- [parte] = CanCollide original
+local lockFloatWasOn = false
+local lockApfPending = false
 
 local function myRoot()
 	return player.Character and player.Character:FindFirstChild("HumanoidRootPart")
 end
 
--- solta a trava vertical (heartbeat de travamento, BodyVelocity e BodyGyro)
-local function releaseHelpLock()
-	if helpLock then
-		if helpLock.conn then helpLock.conn:Disconnect() end
-		if helpLock.bv then helpLock.bv:Destroy() end
-		if helpLock.bg then helpLock.bg:Destroy() end
-		helpLock = nil
+-- altura dos pés até o centro do HumanoidRootPart
+local function feetOffset(hum, root)
+	return (hum.RigType == Enum.HumanoidRigType.R15) and (hum.HipHeight + root.Size.Y / 2) or 3
+end
+
+-- headOn = true: só a cabeça tem colisão; false: nenhuma parte do corpo tem
+local function setBodyCollide(char, headOn)
+	for _, part in ipairs(char:GetDescendants()) do
+		if part:IsA("BasePart") then
+			if lockSaved[part] == nil then lockSaved[part] = part.CanCollide end
+			part.CanCollide = headOn and part.Name == "Head"
+		end
 	end
 end
 
--- religa o Anti Part Fling (se ele estava ligado antes do TP ajuda)
-local function resumeApfAfterHelp()
-	if helpApfPending then
-		helpApfPending = false
+local function restoreCollide()
+	for part, cc in pairs(lockSaved) do
+		if part.Parent then part.CanCollide = cc end
+		lockSaved[part] = nil
+	end
+end
+
+local function lockStop()
+	if not lockOn then return end
+	lockOn = false
+	if lockConn then lockConn:Disconnect() lockConn = nil end
+
+	-- se eu estiver abaixo do chão, subo antes de tirar a plataforma
+	local r = myRoot()
+	if r and r.Position.Y < lockGroundY + 1 then
+		r.CFrame = CFrame.new(r.Position.X, lockGroundY + 3.5, r.Position.Z) * CFrame.Angles(0, lockYaw, 0)
+		r.AssemblyLinearVelocity = Vector3.zero
+	end
+	restoreCollide()
+	if not lockFloatWasOn then toggles.Float(false) end
+	if lockApfPending then
+		lockApfPending = false
 		toggles["Anti Part Fling"](true)
 	end
+	helpBtn.setOn(false)
+	helpBtn.face.Text = "lock in ajuda"
 end
 
-local function runTpHelp()
-	if helpBusy then return end
-	if not targetRoot() then
+local function lockStart()
+	local char = player.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	local mine = myRoot()
+	local victim = selectedPlayer
+	local vch = victim and victim.Character
+	local vhrp = vch and vch:FindFirstChild("HumanoidRootPart")
+	local vhum = vch and vch:FindFirstChildOfClass("Humanoid")
+	if not (hum and mine and vhrp and vhum) then
 		helpBtn.face.Text = "Selecione um jogador"
 		task.delay(1.5, function()
-			helpBtn.face.Text = "tp ajuda"
+			if not lockOn then helpBtn.face.Text = "lock in ajuda" end
 		end)
 		return
 	end
 
-	local char = player.Character
-	local hum = char and char:FindFirstChildOfClass("Humanoid")
-	local mine = myRoot()
-	if not hum or not mine then return end
+	lockOn = true
+	lockChar, lockVictim = char, victim
+	lockYaw = math.atan2(-mine.CFrame.LookVector.X, -mine.CFrame.LookVector.Z)
+	lockGroundY = vhrp.Position.Y - feetOffset(vhum, vhrp)
+	helpBtn.setOn(true)
+	helpBtn.face.Text = "Subindo..."
 
-	helpBusy = true
-	helpBtn.face.Text = "Ajudando..."
-	releaseHelpLock() -- caso eu ainda esteja deitado e travado de um TP anterior
-	-- o Anti Part Fling derrubaria meu corpo deitado da plataforma (ele tira a colisão):
-	-- pausa agora e religa quando eu levantar
+	-- o Anti Part Fling tira a colisão do corpo e me derrubaria: pausa e religa no fim
 	if apfActive then
-		helpApfPending = true
+		lockApfPending = true
 		toggles["Anti Part Fling"](false)
 	end
-	if conns.helpJump then conns.helpJump:Disconnect() conns.helpJump = nil end
+	lockFloatWasOn = floatPart ~= nil
+	toggles.Float(true)
 
-	-- deitado de barriga para cima, mantendo para onde eu estava olhando
-	local look = mine.CFrame.LookVector
-	local yaw = math.atan2(-look.X, -look.Z)
-	local lieRot = CFrame.Angles(0, yaw, 0) * CFrame.Angles(math.rad(90), 0, 0)
+	-- começo abaixo do chão, sob o jogador, sem colisão
+	local rising = true
+	local curY = lockGroundY - LOCK_HEAD_OFFSET - LOCK_UNDER_DEPTH
+	local risen = 0
+	setBodyCollide(char, false)
+	mine.AssemblyLinearVelocity = Vector3.zero
+	mine.AssemblyAngularVelocity = Vector3.zero
+	mine.CFrame = CFrame.new(vhrp.Position.X, curY, vhrp.Position.Z) * CFrame.Angles(0, lockYaw, 0)
+	floatY = curY - 3.5
 
-	local bv, bg, lockConn
-	local lockX, lockZ = mine.Position.X, mine.Position.Z
-	local victim = selectedPlayer -- sigo sempre o jogador que estava selecionado ao começar
-	local follow = false          -- vira true depois do TP
-	local lastGrab = 0
-
-	local function victimRoot()
-		local ch = victim and victim.Character
-		return ch and ch:FindFirstChild("HumanoidRootPart")
-	end
-	local ok = pcall(function()
-		-- 1) trip: fica deitado
-		hum.PlatformStand = true
-
-		-- 2) "fly": segura no ar e mantém deitado (o fly normal me levantaria, pois alinha com a câmera)
-		bv = Instance.new("BodyVelocity")
-		bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
-		bv.Velocity = Vector3.zero
-		bv.Parent = mine
-		bg = Instance.new("BodyGyro")
-		bg.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
-		bg.P = 9e4
-		bg.CFrame = lieRot
-		bg.Parent = mine
-		helpLock = { bv = bv, bg = bg }
-
-		-- trava: a partir do trip só me movo na vertical (X e Z fixos; o giro fica por conta do BodyGyro)
-		lockConn = RunService.Heartbeat:Connect(function()
-			local r = myRoot()
-			if not r or player.Character ~= char then -- morri ou troquei de personagem
-				releaseHelpLock()
-				resumeApfAfterHelp()
-				return
-			end
-			local pos = r.Position
-
-			-- depois do TP: sigo o jogador (com antecipação do atraso de rede) para ele nunca sair de cima de mim
-			if follow then
-				local tr = victimRoot()
-				if tr then
-					local tv = tr.AssemblyLinearVelocity
-					local lead = math.clamp(player:GetNetworkPing() * FOLLOW_PING_FACTOR + FOLLOW_LEAD, 0, 0.35)
-					local ahead = Vector3.new(tv.X, 0, tv.Z) * lead
-					if ahead.Magnitude > MAX_LEAD_STUDS then ahead = ahead.Unit * MAX_LEAD_STUDS end
-					lockX = tr.Position.X + ahead.X
-					lockZ = tr.Position.Z + ahead.Z
-
-					-- ele caiu de cima de mim (ficou bem abaixo das minhas costas)? volto para baixo dele
-					if tr.Position.Y < pos.Y + 1 and os.clock() - lastGrab > 1 then
-						lastGrab = os.clock()
-						noclip(true)
-						local ny = tr.Position.Y - LIE_OFFSET
-						r.CFrame = CFrame.new(lockX, ny, lockZ) * r.CFrame.Rotation
-						r.AssemblyLinearVelocity = Vector3.zero
-						floatY = ny - 1.0
-						task.delay(0.35, function()
-							if helpLock then noclip(false) end
-						end)
-						return
-					end
-				end
-			end
-
-			if math.abs(pos.X - lockX) > 0.02 or math.abs(pos.Z - lockZ) > 0.02 then
-				r.CFrame = CFrame.new(lockX, pos.Y, lockZ) * r.CFrame.Rotation
-			end
-			local v = r.AssemblyLinearVelocity
-			if v.X ~= 0 or v.Z ~= 0 then
-				r.AssemblyLinearVelocity = Vector3.new(0, v.Y, 0)
-			end
-		end)
-		helpLock.conn = lockConn
-		task.wait(0.3) -- tempo de deitar
-
-		-- 3) noclip
-		noclip(true)
-
-		-- 4) TP exatamente abaixo: pés dele no meio do meu tronco (a trava passa a valer neste ponto)
-		local theirs = victimRoot()
-		local p = theirs.Position
-		lockX, lockZ = p.X, p.Z
-		mine.CFrame = CFrame.new(p.X, p.Y - LIE_OFFSET, p.Z) * lieRot
-		mine.AssemblyLinearVelocity = Vector3.zero
-		mine.AssemblyAngularVelocity = Vector3.zero
-		follow = true -- daqui em diante sigo o jogador
-		task.wait(0.05)
-
-		-- plataforma do float sob as minhas costas (para eu ficar deitado no final)
-		toggles.Float(true)
-		floatY = mine.Position.Y - 1.0
-
-		-- 5) sobe 10 studs aos poucos
-		bv.Velocity = Vector3.new(0, RISE_SPEED, 0)
-		local risen = 0
-		while risen < RISE_STUDS and mine.Parent do
-			local dt = RunService.Heartbeat:Wait()
-			risen += RISE_SPEED * dt
-			floatY = mine.Position.Y - 1.0
+	lockConn = RunService.Heartbeat:Connect(function(dt)
+		local ch = player.Character
+		local r = ch and ch:FindFirstChild("HumanoidRootPart")
+		local h = ch and ch:FindFirstChildOfClass("Humanoid")
+		local vc = victim.Character
+		local vr = vc and vc:FindFirstChild("HumanoidRootPart")
+		local vh = vc and vc:FindFirstChildOfClass("Humanoid")
+		if ch ~= lockChar or not r or not h or h.Health <= 0 or not vr or not vh then
+			lockStop()
+			return
 		end
-		bv.Velocity = Vector3.zero
-		floatY = mine.Position.Y - 1.0
-		task.wait(0.1)
-	end)
 
-	-- 6) desliga o noclip (sempre, mesmo se algo falhou)
-	noclip(false)
-	task.wait(0.1)
-	if ok and bv and bv.Parent then
-		-- libera só a vertical (a plataforma do float me segura); X e Z continuam travados/seguindo
-		bv.MaxForce = Vector3.new(9e9, 0, 9e9)
-		bv.Velocity = Vector3.zero
-	else
-		-- algo falhou: solta tudo
-		releaseHelpLock()
-		resumeApfAfterHelp()
-	end
-
-	-- 7) continuo deitado, travado na vertical e seguindo o jogador até eu pular
-	conns.helpJump = UIS.JumpRequest:Connect(function()
-		local r = myRoot()
-		local h = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
-		if conns.helpJump then conns.helpJump:Disconnect() conns.helpJump = nil end
-		releaseHelpLock() -- solta a trava vertical
-		if h == hum and h.PlatformStand and r then
-			r.CFrame = CFrame.new(r.Position + Vector3.new(0, 2.5, 0)) * CFrame.Angles(0, yaw, 0)
-			h.PlatformStand = false
-			h:ChangeState(Enum.HumanoidStateType.GettingUp)
+		if rising then
+			-- subida gradual até a cabeça alcançar os pés dele (ou o limite de studs)
+			local step = RISE_SPEED * dt
+			curY += step
+			risen += step
+			if curY + LOCK_HEAD_OFFSET >= lockGroundY or risen >= RISE_STUDS then
+				rising = false
+				setBodyCollide(ch, true) -- agora a cabeça tem colisão e ele pode ficar em pé nela
+				helpBtn.face.Text = "lock in ajuda"
+			end
+		else
+			-- depois de subir: fico na altura certa para ele continuar em pé em cima da minha cabeça
+			curY = vr.Position.Y - feetOffset(vh, vr) - LOCK_HEAD_OFFSET
 		end
-		resumeApfAfterHelp()
-	end)
 
-	helpBusy = false
-	helpBtn.face.Text = "tp ajuda"
+		-- sigo o jogador (com antecipação do atraso de rede) para ele nunca sair de cima de mim
+		local tv = vr.AssemblyLinearVelocity
+		local lead = math.clamp(player:GetNetworkPing() * FOLLOW_PING_FACTOR + FOLLOW_LEAD, 0, 0.35)
+		local ahead = Vector3.new(tv.X, 0, tv.Z) * lead
+		if ahead.Magnitude > MAX_LEAD_STUDS then ahead = ahead.Unit * MAX_LEAD_STUDS end
+
+		r.CFrame = CFrame.new(vr.Position.X + ahead.X, curY, vr.Position.Z + ahead.Z) * CFrame.Angles(0, lockYaw, 0)
+		r.AssemblyLinearVelocity = Vector3.zero
+		r.AssemblyAngularVelocity = Vector3.zero
+		h.PlatformStand = false
+		if floatPart then floatY = curY - 3.5 end -- plataforma do Float sob os pés
+	end)
 end
 
-helpBtn.face.Activated:Connect(runTpHelp)
+helpBtn.face.Activated:Connect(function()
+	if lockOn then lockStop() else lockStart() end
+end)
 
 -- ===== REJOIN / SERVER HOP (botões) =====
 rejoinBtn.face.Activated:Connect(function()
