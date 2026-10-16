@@ -1805,13 +1805,14 @@ end)
 -- pegar: traz a parte selecionada até você (de qualquer distância) e a deixa flutuando atrás e acima de você.
 -- mira : mostra a linha da trajetória do arremesso (vai para onde a câmera aponta); up/down ajustam a mira.
 -- jogar: arremessa a parte segurada com a força definida em "power".
+-- limpar: reseta tudo (solta a parte, tira a seleção e reinicia os controles) para selecionar outra sem problemas.
 do
-	local power = 400        -- força do arremesso (velocidade inicial em studs por segundo). Maior = mais longe
+	local power = 20.7263        -- força do arremesso (velocidade inicial em studs por segundo). Maior = mais longe
 	local AIM_STEP_DEG = 3       -- quanto cada toque em up/down muda a mira (graus)
 	local AIM_LIMIT_DEG = 80     -- limite da mira para cima e para baixo (graus)
 	local HOLD_BACK = 4          -- distância atrás de você (studs, somada ao tamanho da parte)
-	local HOLD_UP = 4            -- altura acima de você (studs, somada ao tamanho da parte)
-	local PULL_SPEED_MAX = 400   -- velocidade máxima com que a parte vem até você
+	local HOLD_UP = 15           -- altura acima de você (studs, somada à metade do tamanho da parte)
+	local PULL_SPEED_MAX = 1500  -- velocidade máxima com que a parte vem até você (studs por segundo)
 	local TAP_TOLERANCE = 12     -- pixels que o dedo pode mexer e ainda contar como "toque"
 	local RAY_LENGTH = 5000      -- alcance do toque para selecionar (studs)
 	local AIM_POINTS = 40        -- quantos trechos tem a linha da mira
@@ -1819,7 +1820,8 @@ do
 	local RED = Color3.fromRGB(255, 60, 60)
 	local BLUE = Color3.fromRGB(70, 140, 255)
 	local NOTICE_RED = Color3.fromRGB(255, 110, 110)
-	local MINI_W, MINI_H = PANEL_W, 246
+	local CLEAN_GREEN = Color3.fromRGB(120, 230, 150)
+	local MINI_W, MINI_H = PANEL_W, 288
 
 	local on = false
 	local selected, highlight
@@ -1833,6 +1835,8 @@ do
 	local connList = {}
 	local menu, status, info, aimBtn
 	local noticeUntil = 0
+	local noticeActive = false
+	local created = {}      -- controles criados por mim (a limpeza apaga todos)
 
 	local function getRoot()
 		return player.Character and player.Character:FindFirstChild("HumanoidRootPart")
@@ -1911,22 +1915,42 @@ do
 	end
 
 	-- aviso no texto do mini menu (vermelho, some sozinho)
-	local function notice(text)
+	local function notice(text, color)
 		status.Text = text
-		status.TextColor3 = NOTICE_RED
+		status.TextColor3 = color or NOTICE_RED
 		noticeUntil = os.clock() + 1.8
+		noticeActive = true
 	end
 
 	-- fica com a física das partes soltas, mesmo longe (precisa repetir a cada frame)
 	local function claimPhysics()
 		pcall(function() player.MaximumSimulationRadius = 1e9 end)
 		if sethiddenproperty then pcall(sethiddenproperty, player, "SimulationRadius", 1e9) end
+		if setsimulationradius then pcall(setsimulationradius, 1e9, 1e9) end
 	end
 
-	-- onde a parte fica em relação a mim: atrás (+Z) e acima, mais longe se a parte for grande
-	local function holdOffset(part)
+	-- (altura, distância atrás) da parte em relação a mim; partes grandes ficam mais longe
+	local function holdOffsets(part)
 		local r = part and (part.Size.Magnitude / 2) or 1
-		return Vector3.new(0, HOLD_UP + r * 0.5, HOLD_BACK + r)
+		return HOLD_UP + r * 0.5, HOLD_BACK + r
+	end
+
+	-- ponto do mundo onde a parte fica: atrás de mim (para onde eu NÃO olho) e bem acima
+	local function holdPoint(hrp, up, back)
+		local look = hrp.CFrame.LookVector
+		local flat = Vector3.new(look.X, 0, look.Z)
+		if flat.Magnitude < 0.05 then flat = Vector3.new(0, 0, -1) else flat = flat.Unit end
+		return hrp.Position - flat * back + Vector3.new(0, up, 0)
+	end
+
+	-- guarda o controle criado, para a limpeza conseguir apagar tudo
+	local function register(inst)
+		if #created > 60 then
+			for i = #created, 1, -1 do
+				if not created[i].Parent then table.remove(created, i) end
+			end
+		end
+		table.insert(created, inst)
 	end
 
 	-- ===== segurar a parte =====
@@ -1945,7 +1969,7 @@ do
 		ap.RigidityEnabled = false
 		ap.MaxForce = math.huge
 		ap.MaxVelocity = PULL_SPEED_MAX
-		ap.Responsiveness = 30
+		ap.Responsiveness = 60
 		ap.Position = part.Position
 		ap.Parent = part
 
@@ -1958,6 +1982,9 @@ do
 		ao.Parent = part
 
 		h.att, h.ap, h.ao = att, ap, ao
+		register(att)
+		register(ap)
+		register(ao)
 	end
 
 	local function releaseHeld()
@@ -1996,9 +2023,11 @@ do
 		for _, q in ipairs(part:GetConnectedParts(true)) do saved[q] = q.CanCollide end
 		for q in pairs(saved) do q.CanCollide = false end
 
+		local up, back = holdOffsets(part)
 		local h = {
 			part = part,
-			offset = holdOffset(part),
+			up = up,
+			back = back,
 			rel = hrp.CFrame.Rotation:Inverse() * part.CFrame.Rotation, -- mantém a rotação em relação a mim
 			saved = saved,
 		}
@@ -2081,7 +2110,8 @@ do
 		if held then
 			start = held.part.Position
 		else
-			start = hrp.CFrame:PointToWorldSpace(holdOffset(selected))
+			local up, back = holdOffsets(selected)
+			start = holdPoint(hrp, up, back)
 		end
 
 		local v0 = aimDirection() * power
@@ -2158,10 +2188,10 @@ do
 			end
 			local hrp = getRoot()
 			if hrp then
-				-- fica atrás e acima de mim, acompanhando meus movimentos e minha rotação
-				local target = hrp.CFrame:PointToWorldSpace(h.offset)
+				-- fica atrás e bem acima de mim, acompanhando meus movimentos e minha rotação
+				local target = holdPoint(hrp, h.up, h.back)
 				h.ap.Position = target
-				h.ap.MaxVelocity = math.clamp((part.Position - target).Magnitude * 3, 100, PULL_SPEED_MAX)
+				h.ap.MaxVelocity = math.clamp((part.Position - target).Magnitude * 6, 250, PULL_SPEED_MAX)
 				h.ao.CFrame = hrp.CFrame.Rotation * h.rel
 			end
 		elseif os.clock() < claimUntil then
@@ -2208,6 +2238,37 @@ do
 		end
 	end
 
+	local function disconnectAll()
+		for _, c in ipairs(connList) do c:Disconnect() end
+		table.clear(connList)
+	end
+
+	local function connectAll()
+		table.insert(connList, UIS.InputBegan:Connect(onBegan))
+		table.insert(connList, UIS.InputChanged:Connect(onChanged))
+		table.insert(connList, UIS.InputEnded:Connect(onEnded))
+		table.insert(connList, RunService.Heartbeat:Connect(step))
+		table.insert(connList, RunService.RenderStepped:Connect(updateAim))
+	end
+
+	-- limpar: solta a parte, tira a seleção, apaga qualquer controle que tenha sobrado e reinicia as conexões
+	local function resetAll()
+		releaseHeld()
+		clearSelection()
+		for _, inst in ipairs(created) do
+			if inst.Parent then inst:Destroy() end
+		end
+		table.clear(created)
+		claimUntil = 0
+		press = nil
+		pointer = Vector2.zero
+		if aimOn then createAim() end
+		disconnectAll()
+		connectAll()
+		claimPhysics()
+		notice("Tudo limpo. Selecione uma parte.", CLEAN_GREEN)
+	end
+
 	-- ===== mini menu =====
 	menu = Instance.new("Frame")
 	menu.Size = UDim2.fromOffset(MINI_W, MINI_H)
@@ -2238,7 +2299,7 @@ do
 	end
 
 	status = miniLabel(6, 40)
-	info = miniLabel(208, 32)
+	info = miniLabel(248, 32)
 
 	local function fullButton(text, y)
 		return new3DButton(menu, text, UDim2.fromOffset(8, y), UDim2.new(1, -16, 0, ROW_H), T.faceOff, T.baseOff)
@@ -2289,6 +2350,9 @@ do
 	local throwBtn = fullButton("jogar", 168)
 	throwBtn.face.Activated:Connect(throwPart)
 
+	local cleanBtn = fullButton("limpar", 208)
+	cleanBtn.face.Activated:Connect(resetAll)
+
 	local function statusText()
 		if held then return "Segurando: " .. held.part.Name .. ". Mire e jogue." end
 		if selected then
@@ -2325,7 +2389,8 @@ do
 		placeMenu()
 		if os.clock() >= noticeUntil then
 			local s = statusText()
-			if s ~= lastStatus or status.TextColor3 == NOTICE_RED then
+			if noticeActive or s ~= lastStatus then
+				noticeActive = false
 				lastStatus = s
 				status.Text = s
 				status.TextColor3 = T.text
@@ -2345,14 +2410,9 @@ do
 				if l ~= status then l.TextColor3 = T.text end
 			end
 			lastStatus = nil
-			table.insert(connList, UIS.InputBegan:Connect(onBegan))
-			table.insert(connList, UIS.InputChanged:Connect(onChanged))
-			table.insert(connList, UIS.InputEnded:Connect(onEnded))
-			table.insert(connList, RunService.Heartbeat:Connect(step))
-			table.insert(connList, RunService.RenderStepped:Connect(updateAim))
+			connectAll()
 		else
-			for _, c in ipairs(connList) do c:Disconnect() end
-			table.clear(connList)
+			disconnectAll()
 			releaseHeld()
 			clearSelection()
 			press = nil
