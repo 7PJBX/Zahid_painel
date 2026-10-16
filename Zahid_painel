@@ -1809,7 +1809,7 @@ end)
 -- jogar: arremessa a parte segurada com a força definida em "power".
 -- limpar: reseta tudo (solta a parte, tira a seleção e reinicia os controles) para selecionar outra sem problemas.
 do
-	local power = 20.7263        -- força do arremesso (velocidade inicial em studs por segundo). Maior = mais longe
+	local power = 666        -- força do arremesso (velocidade inicial em studs por segundo). Maior = mais longe
 	local AIM_STEP_DEG = 3       -- quanto cada toque em up/down muda a mira (graus)
 	local AIM_LIMIT_DEG = 80     -- limite da mira para cima e para baixo (graus)
 	local HOLD_BACK = 4          -- distância atrás de você (studs, somada ao tamanho da parte)
