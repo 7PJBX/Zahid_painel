@@ -1808,8 +1808,9 @@ end)
 -- mira : mostra a linha da trajetória do arremesso (vai para onde a câmera aponta); up/down ajustam a mira.
 -- jogar: arremessa a parte segurada com a força definida em "power".
 -- limpar: reseta tudo (solta a parte, tira a seleção e reinicia os controles) para selecionar outra sem problemas.
-do
-	local power = 666        -- força do arremesso (velocidade inicial em studs por segundo). Maior = mais longe
+-- (o bloco fica dentro de uma função para não estourar o limite de variáveis locais do script)
+local function buildTelecinese()
+	local power = 20.7263        -- força do arremesso (velocidade inicial em studs por segundo). Maior = mais longe
 	local AIM_STEP_DEG = 3       -- quanto cada toque em up/down muda a mira (graus)
 	local AIM_LIMIT_DEG = 80     -- limite da mira para cima e para baixo (graus)
 	local HOLD_BACK = 4          -- distância atrás de você (studs, somada ao tamanho da parte)
@@ -2600,6 +2601,8 @@ do
 		partsBtn.setOn(on)
 	end)
 end
+
+buildTelecinese()
 
 -- ===== ABRIR / FECHAR O PAINEL (com animação) =====
 local panelOpen = false
