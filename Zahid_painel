@@ -1813,7 +1813,7 @@ local function buildTelecinese()
 	local power = 666       -- força do arremesso (velocidade inicial em studs por segundo). Maior = mais longe
 	local AIM_STEP_DEG = 3       -- quanto cada toque em up/down muda a mira (graus)
 	local AIM_LIMIT_DEG = 80     -- limite da mira para cima e para baixo (graus)
-	local HOLD_BACK = -10          -- distância atrás de você (studs, somada ao tamanho da parte)
+	local HOLD_BACK = 4          -- distância atrás de você (studs, somada ao tamanho da parte)
 	local HOLD_UP = 15           -- altura acima de você (studs, somada à metade do tamanho da parte)
 	local PULL_SPEED_MAX = 1500  -- velocidade máxima com que a parte vem até você (studs por segundo)
 	local TAP_TOLERANCE = 12     -- pixels que o dedo pode mexer e ainda contar como "toque"
