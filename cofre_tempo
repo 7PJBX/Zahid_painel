@@ -4,6 +4,8 @@
 -- lugar da informação e uma contagem regressiva. Quando o tempo acaba, o botão "resgatar" libera a informação
 -- (ela aparece na tela e é copiada para a área de transferência, se o executor permitir).
 -- Os salvos ficam em um arquivo (writefile/readfile do executor) e continuam lá quando você entra de novo.
+-- "unlock all": libera de uma vez todas as informações que estão trancadas, mas só depois de uma espera de
+-- 5 minutos (dá para cancelar durante a espera). Depois que libera, o botão fica 7 dias sem poder ser usado.
 -- Obs.: a trava é só do menu (a informação fica guardada no arquivo) e usa o relógio do aparelho.
 
 local Players = game:GetService("Players")
@@ -24,6 +26,10 @@ local DURATIONS = {
 	{ label = "7 dias", seconds = 7 * 86400 },
 }
 local durIndex = 2 -- começa em "1 hora"
+
+-- ===== UNLOCK ALL =====
+local UNLOCK_DELAY = 5 * 60        -- espera (segundos) entre tocar no botão e liberar tudo
+local UNLOCK_COOLDOWN = 7 * 86400  -- depois de liberar, tempo (segundos) até poder usar de novo
 
 -- ===== CORES (mesmo estilo escuro do menu Zahid) =====
 local T = {
@@ -59,6 +65,11 @@ end
 
 local function nowTs()
 	return DateTime.now().UnixTimestamp
+end
+
+-- a informação está liberada? (o tempo acabou ou o "unlock all" liberou)
+local function isReady(entry)
+	return entry.unlocked == true or nowTs() >= entry.savedAt + entry.seconds
 end
 
 -- data e hora no horário do aparelho: 18/10/2026 14:32:07
@@ -174,10 +185,11 @@ local FILE = "CofreDoTempo_" .. player.UserId .. ".json"
 local canFile = (writefile and readfile and isfile) and true or false
 local entries = {}
 local nextId = 1
+local unlockState = { startedAt = nil, lastUnlockAt = nil, ids = {} } -- estado do "unlock all"
 
 local function persist()
 	if not canFile then return end
-	pcall(function() writefile(FILE, HttpService:JSONEncode(entries)) end)
+	pcall(function() writefile(FILE, HttpService:JSONEncode({ entries = entries, unlock = unlockState })) end)
 end
 
 if canFile then
@@ -186,12 +198,27 @@ if canFile then
 		return HttpService:JSONDecode(readfile(FILE))
 	end)
 	if ok and type(data) == "table" then
-		for _, e in ipairs(data) do
+		local list = data -- formato antigo: só a lista de salvos
+		if type(data.entries) == "table" then -- formato novo: { entries = {...}, unlock = {...} }
+			list = data.entries
+			local u = data.unlock
+			if type(u) == "table" then
+				if type(u.startedAt) == "number" then unlockState.startedAt = u.startedAt end
+				if type(u.lastUnlockAt) == "number" then unlockState.lastUnlockAt = u.lastUnlockAt end
+				if type(u.ids) == "table" then
+					for _, id in ipairs(u.ids) do
+						if type(id) == "number" then table.insert(unlockState.ids, id) end
+					end
+				end
+			end
+		end
+		for _, e in ipairs(list) do
 			if type(e) == "table" and type(e.title) == "string" and type(e.info) == "string"
 				and type(e.savedAt) == "number" and type(e.seconds) == "number" then
 				e.id = type(e.id) == "number" and e.id or nextId
 				e.label = type(e.label) == "string" and e.label or ""
 				e.redeemed = e.redeemed == true
+				e.unlocked = e.unlocked == true
 				table.insert(entries, e)
 				nextId = math.max(nextId, e.id + 1)
 			end
@@ -372,14 +399,14 @@ savedHeader.Font = T.font
 savedHeader.TextSize = 15
 savedHeader.TextColor3 = T.textDim
 savedHeader.TextXAlignment = Enum.TextXAlignment.Left
-savedHeader.LayoutOrder = 4
+savedHeader.LayoutOrder = 6
 savedHeader.Parent = body
 
 local listFrame = Instance.new("Frame")
 listFrame.Size = UDim2.new(1, 0, 0, 0)
 listFrame.AutomaticSize = Enum.AutomaticSize.Y
 listFrame.BackgroundTransparency = 1
-listFrame.LayoutOrder = 5
+listFrame.LayoutOrder = 7
 listFrame.Parent = body
 local listLayout = Instance.new("UIListLayout")
 listLayout.Padding = UDim.new(0, 8)
@@ -479,7 +506,7 @@ local function addCard(entry)
 
 	function rec.update()
 		if entry.redeemed then return end
-		local remaining = entry.savedAt + entry.seconds - nowTs()
+		local remaining = entry.unlocked and 0 or (entry.savedAt + entry.seconds - nowTs())
 		if remaining > 0 then
 			countdown.Text = fmtRemaining(remaining)
 			if ready ~= false then
@@ -502,7 +529,7 @@ local function addCard(entry)
 
 	redeemBtn.face.Activated:Connect(function()
 		if entry.redeemed then return end
-		if nowTs() < entry.savedAt + entry.seconds then
+		if not isReady(entry) then
 			flashText(redeemBtn.face, "ainda trancado", T.red) -- só resgata quando o tempo acabar
 			return
 		end
@@ -545,6 +572,147 @@ end
 for _, e in ipairs(entries) do addCard(e) end
 refreshHeader()
 
+-- ===== UNLOCK ALL (espera de 5 min + cooldown de 7 dias) =====
+-- Toque 1: pede confirmação. Toque 2 (em até 4 s): começa a espera de 5 minutos (a contagem continua mesmo
+-- fechando o jogo). Tocar durante a espera cancela, sem gastar o cooldown. Quando a espera acaba, libera todas
+-- as informações que estavam trancadas na hora em que você tocou (as salvas depois continuam trancadas).
+-- Aí o botão fica 7 dias sem poder ser usado.
+local unlockRow = Instance.new("Frame")
+unlockRow.Size = UDim2.new(1, 0, 0, 38)
+unlockRow.BackgroundTransparency = 1
+unlockRow.LayoutOrder = 4
+unlockRow.Parent = body
+
+local unlockBtn = new3DButton(unlockRow, "unlock all", UDim2.fromOffset(0, 0), UDim2.new(1, 0, 0, 38), T.faceOff, T.baseOff)
+
+local unlockInfo = Instance.new("TextLabel")
+unlockInfo.Size = UDim2.new(1, 0, 0, 16)
+unlockInfo.BackgroundTransparency = 1
+unlockInfo.Font = T.font
+unlockInfo.TextSize = 12
+unlockInfo.TextColor3 = T.textDim
+unlockInfo.TextXAlignment = Enum.TextXAlignment.Left
+unlockInfo.TextTruncate = Enum.TextTruncate.AtEnd
+unlockInfo.LayoutOrder = 5
+unlockInfo.Parent = body
+
+local confirmUntil = 0 -- até quando o "toque de novo para confirmar" vale (os.clock)
+local flashUntil = 0   -- até quando um aviso rápido fica no botão (os.clock)
+local lastMode = nil   -- só troca as cores quando o modo muda
+
+-- ids das informações que estão trancadas agora
+local function lockedIds()
+	local ids = {}
+	for _, e in ipairs(entries) do
+		if not isReady(e) then table.insert(ids, e.id) end
+	end
+	return ids
+end
+
+-- fim da espera: libera as que estavam trancadas na hora do toque
+local function finishUnlock()
+	local set = {}
+	for _, id in ipairs(unlockState.ids) do set[id] = true end
+	for _, e in ipairs(entries) do
+		if set[e.id] and not isReady(e) then e.unlocked = true end
+	end
+	unlockState.startedAt = nil
+	unlockState.ids = {}
+	unlockState.lastUnlockAt = nowTs() -- o cooldown de 7 dias conta daqui
+	persist()
+	for _, rec in ipairs(cards) do rec.update() end
+end
+
+local function cancelUnlock()
+	unlockState.startedAt = nil
+	unlockState.ids = {}
+	persist()
+end
+
+-- aviso rápido no botão (some sozinho)
+local function unlockFlash(text, color)
+	unlockBtn.face.Text = text
+	unlockBtn.face.TextColor3 = color or T.text
+	flashUntil = os.clock() + 1.3
+	lastMode = nil -- força voltar as cores certas depois do aviso
+end
+
+local function setMode(mode, faceCol, baseCol, textCol)
+	if lastMode ~= mode then
+		lastMode = mode
+		unlockBtn.setColors(faceCol, baseCol, textCol)
+	end
+end
+
+-- roda a cada segundo: termina a espera, atualiza texto, contagem e cores do botão
+local function unlockTick()
+	local now = nowTs()
+	if unlockState.startedAt and now >= unlockState.startedAt + UNLOCK_DELAY then
+		finishUnlock()
+		now = nowTs()
+	end
+	if os.clock() < flashUntil then return end -- deixa o aviso rápido aparecer
+
+	if unlockState.startedAt then
+		local left = unlockState.startedAt + UNLOCK_DELAY - now
+		unlockBtn.face.Text = "liberando em " .. fmtRemaining(left) .. " - cancelar"
+		setMode("wait", T.faceNet, T.baseNet, T.text)
+		unlockInfo.Text = "Libera " .. #unlockState.ids .. " trancado(s) quando a contagem acabar."
+	elseif unlockState.lastUnlockAt and now < unlockState.lastUnlockAt + UNLOCK_COOLDOWN then
+		local left = unlockState.lastUnlockAt + UNLOCK_COOLDOWN - now
+		unlockBtn.face.Text = "disponível em " .. fmtRemaining(left)
+		setMode("cool", T.faceLock, T.baseLock, T.textDim)
+		unlockInfo.Text = "Último uso: " .. fmtDate(unlockState.lastUnlockAt)
+	elseif os.clock() < confirmUntil then
+		unlockBtn.face.Text = "toque de novo para confirmar"
+		setMode("confirm", T.faceNet, T.baseNet, T.text)
+		unlockInfo.Text = "Começa a espera de 5 minutos para liberar tudo."
+	else
+		unlockBtn.face.Text = "unlock all"
+		setMode("idle", T.faceOff, T.baseOff, T.text)
+		unlockInfo.Text = "Libera tudo depois de 5 min. Depois, 7 dias sem poder usar."
+	end
+end
+
+unlockBtn.face.Activated:Connect(function()
+	local now = nowTs()
+
+	-- durante a espera: cancela
+	if unlockState.startedAt then
+		cancelUnlock()
+		unlockFlash("cancelado", T.red)
+		return
+	end
+
+	-- em cooldown
+	if unlockState.lastUnlockAt and now < unlockState.lastUnlockAt + UNLOCK_COOLDOWN then
+		unlockFlash("ainda em espera", T.red)
+		return
+	end
+
+	-- nada trancado
+	if #lockedIds() == 0 then
+		unlockFlash("nada trancado", T.red)
+		return
+	end
+
+	-- primeiro toque: pede confirmação
+	if os.clock() >= confirmUntil then
+		confirmUntil = os.clock() + 4
+		flashUntil = 0
+		unlockTick()
+		return
+	end
+
+	-- segundo toque: começa a espera de 5 minutos
+	confirmUntil = 0
+	unlockState.startedAt = now
+	unlockState.ids = lockedIds()
+	persist()
+	flashUntil = 0
+	unlockTick()
+end)
+
 -- ===== SALVAR =====
 saveBtn.face.Activated:Connect(function()
 	local title = trim(titleBox.Text)
@@ -582,6 +750,7 @@ end)
 -- ===== CONTAGEM REGRESSIVA (atualiza todos os cartões a cada segundo) =====
 task.spawn(function()
 	while gui.Parent do
+		unlockTick()
 		for _, rec in ipairs(cards) do rec.update() end
 		task.wait(1)
 	end
