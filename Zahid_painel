@@ -894,7 +894,7 @@ local options = {
 -- ===== QUAL VERSÃO RODA: DARK PARA TODOS, ROMÂNTICA SÓ PARA OS USUÁRIOS DA LISTA =====
 -- (nomes de usuário em minúsculas, não o display name)
 local ROMANTIC_USERS = {
-	["7pjbxy8sqf"] = true,
+	["7000pjbxy8sqf"] = true,
 	["yazzy_wm"] = true,
 }
 local IS_ROMANTIC = ROMANTIC_USERS[string.lower(player.Name)] == true
@@ -1489,36 +1489,120 @@ listScale.Parent = list
 local listOpen = false
 local setList -- declarada aqui porque os itens da lista usam ela
 
-local function refreshList()
+local friendCache = {}    -- [userId] = true/false (é meu amigo?)
+local friendPending = {}
+local thumbCache = {}     -- [userId] = imagem do avatar
+local refreshList         -- definida logo abaixo
+local refreshQueued = false
+
+-- reordena a lista aberta (com um pequeno atraso para juntar várias respostas de uma vez)
+local function refreshListSoon()
+	if refreshQueued then return end
+	refreshQueued = true
+	task.delay(0.4, function()
+		refreshQueued = false
+		if listOpen then refreshList() end
+	end)
+end
+
+-- descobre, sem travar, se o jogador é meu amigo; quando a resposta chega, os amigos sobem para o topo
+local function queryFriend(p)
+	if friendCache[p.UserId] ~= nil or friendPending[p.UserId] then return end
+	friendPending[p.UserId] = true
+	task.spawn(function()
+		local ok, res = pcall(function() return player:IsFriendsWith(p.UserId) end)
+		friendPending[p.UserId] = nil
+		friendCache[p.UserId] = (ok and res == true)
+		refreshListSoon()
+	end)
+end
+
+-- foto do avatar (rosto) ao lado do nome
+local function loadAvatar(p, img)
+	local cached = thumbCache[p.UserId]
+	if cached then
+		img.Image = cached
+		return
+	end
+	task.spawn(function()
+		local ok, content = pcall(function()
+			return Players:GetUserThumbnailAsync(p.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size48x48)
+		end)
+		if ok and content then
+			thumbCache[p.UserId] = content
+			if img.Parent then img.Image = content end
+		end
+	end)
+end
+
+function refreshList()
 	for _, c in ipairs(list:GetChildren()) do
 		if c:IsA("Frame") then c:Destroy() end
 	end
-	local found, n = false, 0
+
+	-- amigos primeiro, depois todos os outros; cada grupo em ordem alfabética
+	local entries, found = {}, false
 	for _, p in ipairs(Players:GetPlayers()) do
 		if p ~= player then
 			if p == selectedPlayer then found = true end
-			n += 1
-			local item = new3DButton(list, p.DisplayName .. " (@" .. p.Name .. ")", UDim2.new(),
-				UDim2.new(1, 0, 0, ROW_H), T.faceOff, T.baseOff)
-			item.face.TextSize = 14
-			item.face.TextTruncate = Enum.TextTruncate.AtEnd
-			item.hide()
-
-			-- cada item aparece com um pequeno atraso
-			task.delay((n - 1) * 0.04, function()
-				if item.holder.Parent then
-					item.show()
-				end
-			end)
-
-			item.face.Activated:Connect(function()
-				selectedPlayer = p
-				selectBtn.face.Text = p.DisplayName
-				updateTpText()
-				setList(false)
-			end)
+			queryFriend(p)
+			table.insert(entries, {
+				p = p,
+				friend = friendCache[p.UserId] == true,
+				key = string.lower(p.DisplayName),
+				key2 = string.lower(p.Name),
+			})
 		end
 	end
+	table.sort(entries, function(a, b)
+		if a.friend ~= b.friend then return a.friend end
+		if a.key ~= b.key then return a.key < b.key end
+		return a.key2 < b.key2
+	end)
+
+	for n, e in ipairs(entries) do
+		local p = e.p
+		-- amigos usam outra cor (a mesma dos botões de rede: Rejoin / Server hop)
+		local item = new3DButton(list, p.DisplayName .. " (@" .. p.Name .. ")", UDim2.new(),
+			UDim2.new(1, 0, 0, ROW_H),
+			e.friend and T.faceNet or T.faceOff, e.friend and T.baseNet or T.baseOff)
+		item.face.TextSize = 13
+		item.face.TextTruncate = Enum.TextTruncate.AtEnd
+		item.face.TextXAlignment = Enum.TextXAlignment.Left
+		local fpad = Instance.new("UIPadding")
+		fpad.PaddingLeft = UDim.new(0, 34) -- espaço para a foto
+		fpad.PaddingRight = UDim.new(0, 4)
+		fpad.Parent = item.face
+
+		-- foto do avatar à esquerda do nome
+		local img = Instance.new("ImageLabel")
+		img.Size = UDim2.fromOffset(22, 22)
+		img.Position = UDim2.new(0, -28, 0.5, -11) -- o padding (34) empurra os filhos: compensa para a foto ficar a 6 px da borda
+		img.BackgroundColor3 = Color3.fromRGB(30, 30, 36)
+		img.BackgroundTransparency = 1
+		img.ImageTransparency = 1
+		img.BorderSizePixel = 0
+		img.Parent = item.face
+		Instance.new("UICorner", img).CornerRadius = UDim.new(1, 0)
+		loadAvatar(p, img)
+		item.hide()
+
+		-- cada item aparece com um pequeno atraso
+		task.delay((n - 1) * 0.04, function()
+			if item.holder.Parent then
+				item.show()
+				tween(img, 0.25, { ImageTransparency = 0, BackgroundTransparency = 0.4 })
+			end
+		end)
+
+		item.face.Activated:Connect(function()
+			selectedPlayer = p
+			selectBtn.face.Text = p.DisplayName
+			updateTpText()
+			setList(false)
+		end)
+	end
+
 	if selectedPlayer and not found then
 		selectedPlayer = nil
 		selectBtn.face.Text = "Selecionar jogador"
@@ -1553,7 +1637,13 @@ selectBtn.face.Activated:Connect(function()
 end)
 
 -- a lista atualiza sozinha quando alguém entra ou sai do servidor
-Players.PlayerAdded:Connect(refreshList)
+Players.PlayerAdded:Connect(function(p)
+	queryFriend(p)
+	refreshList()
+end)
+for _, p in ipairs(Players:GetPlayers()) do
+	if p ~= player then queryFriend(p) end
+end
 Players.PlayerRemoving:Connect(function() task.defer(refreshList) end)
 
 tpBtn.face.Activated:Connect(function()
@@ -1806,7 +1896,9 @@ end)
 --        começa a puxá-la e volta para onde estava; a parte vem e fica flutuando atrás e bem acima de você.
 -- puxar vários: faz o mesmo, automaticamente, com até 5 partes soltas (as mais próximas de você).
 -- mira : mostra a linha da trajetória do arremesso (vai para onde a câmera aponta); up/down ajustam a mira.
--- jogar: arremessa a parte segurada com a força definida em "power".
+-- jogar: arremessa a parte segurada com a força definida em "power". Antes de jogar, confere se a parte está
+--        sob a sua física; se não estiver, espera ela voltar (o código tenta recuperá-la o tempo todo).
+-- Enquanto a telecinese está ligada, o personagem não consegue sentar em assentos.
 -- limpar: reseta tudo (solta a parte, tira a seleção e reinicia os controles) para selecionar outra sem problemas.
 -- (o bloco fica dentro de uma função para não estourar o limite de variáveis locais do script)
 local function buildTelecinese()
@@ -1824,9 +1916,14 @@ local function buildTelecinese()
 	local GRAB_EXTRA = 0.15      -- tempo extra (s) perto da parte depois que ela começa a vir
 	local MULTI_MAX = 5          -- quantas partes o "puxar vários" pega, no máximo
 	local MULTI_MIN_SIZE = 2     -- ignora partes muito pequenas (tamanho total menor que isso)
+	local RECLAIM_AFTER = 1.0    -- segundos sem a física da parte antes de tentar recuperá-la por teleporte
+	local RECLAIM_COOLDOWN = 3   -- intervalo mínimo (s) entre tentativas de recuperação
+	local MAX_RECLAIM = 3        -- quantas vezes tenta recuperar a mesma parte antes de desistir
+	local THROW_WAIT_MAX = 8     -- tempo máximo (s) esperando a parte voltar para a sua física antes de jogar
 	local RED = Color3.fromRGB(255, 60, 60)
 	local BLUE = Color3.fromRGB(70, 140, 255)
 	local NOTICE_RED = Color3.fromRGB(255, 110, 110)
+	local WAIT_YELLOW = Color3.fromRGB(255, 205, 100)
 	local CLEAN_GREEN = Color3.fromRGB(120, 230, 150)
 	local MINI_W, MINI_H = PANEL_W, 278
 
@@ -1835,6 +1932,10 @@ local function buildTelecinese()
 	local helds = {}        -- partes que estou segurando: { part, att, ap, ao, rel, up, back, side, saved }
 	local grabbing = false  -- true enquanto o teleporte de "pegar" está acontecendo
 	local grabToken = 0     -- muda para cancelar um "pegar" em andamento
+	local tripText = ""     -- texto de estado durante a viagem de teleporte
+	local throwing = false  -- true enquanto o "jogar" espera as partes ficarem sob a sua física
+	local lastReclaim = 0
+	local seatSaved = {}    -- [humanoid] = estado "Seated" original (para devolver ao desligar)
 	local aimOn = false
 	local aimPitch = 0      -- ajuste da mira (graus): positivo = para cima
 	local aimFolder, aimSegs, aimEnd
@@ -1936,6 +2037,27 @@ local function buildTelecinese()
 		pcall(function() player.MaximumSimulationRadius = 1e9 end)
 		if sethiddenproperty then pcall(sethiddenproperty, player, "SimulationRadius", 1e9) end
 		if setsimulationradius then pcall(setsimulationradius, 1e9, 1e9) end
+	end
+
+	-- true/false se o executor sabe dizer se EU simulo a parte (a física dela está comigo); nil se não sabe
+	local function ownershipExplicit(part)
+		if isnetworkowner then
+			local ok, res = pcall(isnetworkowner, part)
+			if ok then return res == true end
+		end
+		if gethiddenproperty then
+			local ok, age = pcall(gethiddenproperty, part, "ReceiveAge")
+			if ok and type(age) == "number" then return age == 0 end
+		end
+		return nil
+	end
+
+	-- a parte segurada está sob a minha física? (sem as funções do executor, considera que sim quando
+	-- ela está respondendo: perto do ponto onde deve ficar ou chegando até ele)
+	local function heldMine(h)
+		local st = ownershipExplicit(h.part)
+		if st ~= nil then return st end
+		return h.responding == true
 	end
 
 	-- (altura, distância atrás) da parte em relação a mim; partes grandes ficam mais longe
@@ -2044,34 +2166,46 @@ local function buildTelecinese()
 		return list
 	end
 
-	-- teleporta para bem perto de cada parte (o servidor passa a física dela para o jogador mais próximo),
-	-- começa a puxá-la e, no fim, volta para onde eu estava
-	local function grabByTeleport(list)
+	-- espera a parte ficar sob a minha física (até GRAB_WAIT_MAX segundos); true se ficou
+	local function waitOwned(h, token)
+		local part = h.part
+		local start = part.Position
+		local t0 = os.clock()
+		while os.clock() - t0 < GRAB_WAIT_MAX and token == grabToken do
+			RunService.Heartbeat:Wait()
+			claimPhysics()
+			local st = ownershipExplicit(part)
+			if st == true then return true end
+			if st == nil and (part.Position - start).Magnitude > 2 then return true end
+		end
+		return false
+	end
+
+	-- viagem de teleporte: vai para bem perto de cada parte, espera ela ficar sob a minha física e volta
+	-- para onde eu estava. list = partes novas para pegar | reclaim = partes já seguradas que perderam a minha física
+	local function startTrip(list, reclaim)
 		if grabbing then
 			notice("Aguarde, ainda pegando...")
-			return
-		end
-		if #helds > 0 then
-			notice("Você já está com partes. Jogue ou limpe.")
-			return
+			return false
 		end
 		if farmOn then
 			notice("Desligue o auto farm antes de pegar.")
-			return
+			return false
 		end
 		local hrp = getRoot()
 		local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
-		if not hrp or not hum then return end
+		if not hrp or not hum then return false end
 
 		grabbing = true
+		tripText = reclaim and "Recuperando a física da parte..." or "Pegando... (teleportando até a parte)"
 		grabToken += 1
 		local token = grabToken
 		local home = hrp.CFrame
-		local n = #list
+		local n = list and #list or 0
 
-		-- as partes ficam lado a lado atrás de mim
+		-- as partes novas ficam lado a lado atrás de mim
 		local maxSize = 0
-		for _, p in ipairs(list) do maxSize = math.max(maxSize, p.Size.Magnitude) end
+		for _, p in ipairs(list or {}) do maxSize = math.max(maxSize, p.Size.Magnitude) end
 		local spacing = maxSize + 3
 
 		task.spawn(function()
@@ -2087,36 +2221,43 @@ local function buildTelecinese()
 				bv.Parent = hrp
 			end
 
+			local function goNear(part)
+				hrp.CFrame = CFrame.new(part.Position + Vector3.new(0, 3, 0)) * home.Rotation
+				hrp.AssemblyLinearVelocity = Vector3.zero
+				hrp.AssemblyAngularVelocity = Vector3.zero
+				claimPhysics()
+			end
+
 			local failed = 0
 			pcall(function()
-				for i, part in ipairs(list) do
-					if token ~= grabToken or not hrp.Parent then break end
-					if part.Parent then
-						-- vai para bem perto da parte
-						hrp.CFrame = CFrame.new(part.Position + Vector3.new(0, 3, 0)) * home.Rotation
-						hrp.AssemblyLinearVelocity = Vector3.zero
-						hrp.AssemblyAngularVelocity = Vector3.zero
-						claimPhysics()
-
-						-- começa a puxar e espera a parte responder (sinal de que a física dela passou para mim)
-						local up, back = holdOffsets(part)
-						local h = addHold(part, up, back, (i - (n + 1) / 2) * spacing, hrp)
-						local start = part.Position
-						local t0 = os.clock()
-						local moved = false
-						while os.clock() - t0 < GRAB_WAIT_MAX and token == grabToken do
-							RunService.Heartbeat:Wait()
-							claimPhysics()
-							if (part.Position - start).Magnitude > 2 then
-								moved = true
-								break
+				if reclaim then
+					-- recupera a física das partes que já estou segurando
+					for _, h in ipairs(reclaim) do
+						if token ~= grabToken or not hrp.Parent then break end
+						if h.part.Parent then
+							goNear(h.part)
+							buildHold(h) -- controles novos
+							if waitOwned(h, token) then
+								task.wait(GRAB_EXTRA)
+							else
+								failed += 1
 							end
 						end
-						if moved then
-							task.wait(GRAB_EXTRA)
-						else
-							removeHold(h)
-							failed += 1
+					end
+				else
+					-- pega partes novas
+					for i, part in ipairs(list) do
+						if token ~= grabToken or not hrp.Parent then break end
+						if part.Parent then
+							goNear(part)
+							local up, back = holdOffsets(part)
+							local h = addHold(part, up, back, (i - (n + 1) / 2) * spacing, hrp)
+							if waitOwned(h, token) then
+								task.wait(GRAB_EXTRA)
+							else
+								removeHold(h)
+								failed += 1
+							end
 						end
 					end
 				end
@@ -2135,7 +2276,9 @@ local function buildTelecinese()
 			grabbing = false
 
 			if token == grabToken then
-				if #helds == 0 then
+				if reclaim then
+					if failed == 0 then notice("Física da parte recuperada.", CLEAN_GREEN) end
+				elseif #helds == 0 then
 					notice("Nenhuma parte obedeceu (o servidor controla a física delas).")
 				elseif failed > 0 then
 					notice(#helds .. " partes pegas, " .. failed .. " não obedeceram.", CLEAN_GREEN)
@@ -2146,6 +2289,42 @@ local function buildTelecinese()
 				end
 			end
 		end)
+		return true
+	end
+
+	-- pegar partes novas (só se eu ainda não estiver segurando nada)
+	local function grabByTeleport(list)
+		if grabbing then
+			notice("Aguarde, ainda pegando...")
+			return
+		end
+		if #helds > 0 then
+			notice("Você já está com partes. Jogue ou limpe.")
+			return
+		end
+		startTrip(list, nil)
+	end
+
+	-- vigia: se alguma parte segurada deixou de ser minha por um tempo, volta lá por teleporte para recuperá-la
+	local function reclaimLost()
+		if grabbing then return end
+		local now = os.clock()
+		if now - lastReclaim < RECLAIM_COOLDOWN then return end
+		local lost = {}
+		for _, h in ipairs(helds) do
+			if h.lostSince and now - h.lostSince > RECLAIM_AFTER and h.part.Parent then
+				if (h.attempts or 0) < MAX_RECLAIM then
+					table.insert(lost, h)
+				elseif not h.gaveUp then
+					h.gaveUp = true
+					notice("Não consegui manter a física de uma parte.")
+				end
+			end
+		end
+		if #lost == 0 then return end
+		lastReclaim = now
+		for _, h in ipairs(lost) do h.attempts = (h.attempts or 0) + 1 end
+		startTrip(nil, lost)
 	end
 
 	-- pegar: a parte selecionada
@@ -2207,21 +2386,60 @@ local function buildTelecinese()
 		return rot:VectorToWorldSpace(cam.CFrame.LookVector)
 	end
 
-	-- jogar: arremessa todas as partes que estou segurando
+	-- jogar: confere se cada parte está sob a minha física; se não estiver, espera ela voltar para só então jogar
 	local function throwPart()
 		if #helds == 0 then
 			notice("Pegue uma parte primeiro.")
 			return
 		end
-		local dir = aimDirection()
-		local list = releaseHeld()
-		for _, h in ipairs(list) do
-			if h.part.Parent then
-				h.part.AssemblyAngularVelocity = Vector3.zero
-				h.part.AssemblyLinearVelocity = dir * power
-			end
+		if throwing then return end
+		if grabbing then
+			notice("Aguarde, ainda pegando...")
+			return
 		end
-		claimUntil = os.clock() + 4 -- continua com a física delas durante o voo
+		throwing = true
+		local token = grabToken
+		local dir = aimDirection() -- a direção é a do momento do clique
+		task.spawn(function()
+			local deadline = os.clock() + THROW_WAIT_MAX
+			local lastNote = 0
+			while os.clock() < deadline and token == grabToken and #helds > 0 do
+				local allMine = true
+				for _, h in ipairs(helds) do
+					if not heldMine(h) then
+						allMine = false
+						break
+					end
+				end
+				if allMine then break end
+				if os.clock() - lastNote > 1.5 then
+					lastNote = os.clock()
+					notice("Esperando a parte voltar para a sua física...", WAIT_YELLOW)
+				end
+				RunService.Heartbeat:Wait()
+			end
+			throwing = false
+			if token ~= grabToken or #helds == 0 then return end
+
+			-- joga só as partes que estão sob a minha física
+			local total = #helds
+			local thrown = 0
+			for _, h in ipairs(table.clone(helds)) do
+				if heldMine(h) then
+					local part = h.part
+					removeHold(h)
+					if part.Parent then
+						part.AssemblyAngularVelocity = Vector3.zero
+						part.AssemblyLinearVelocity = dir * power
+					end
+					thrown += 1
+				end
+			end
+			if thrown > 0 then claimUntil = os.clock() + 4 end -- continua com a física delas durante o voo
+			if thrown < total then
+				notice("Parte fora da sua física: não joguei. Tente de novo.")
+			end
+		end)
 	end
 
 	-- ===== linha da trajetória (mira) =====
@@ -2336,6 +2554,7 @@ local function buildTelecinese()
 		if #helds > 0 then
 			claimPhysics()
 			local hrp = getRoot()
+			local now = os.clock()
 			for i = #helds, 1, -1 do
 				local h = helds[i]
 				local part = h.part
@@ -2347,14 +2566,29 @@ local function buildTelecinese()
 						buildHold(h)
 					end
 					if hrp then
-						-- fica atrás e bem acima de mim, acompanhando meus movimentos e minha rotação
+						-- fica na frente/atrás e bem acima de mim, acompanhando meus movimentos e minha rotação
 						local target = holdPoint(hrp, h.up, h.back, h.side)
 						h.ap.Position = target
 						h.ap.MaxVelocity = math.clamp((part.Position - target).Magnitude * 6, 250, PULL_SPEED_MAX)
 						h.ao.CFrame = hrp.CFrame.Rotation * h.rel
+
+						-- a parte está respondendo? (usado quando o executor não sabe dizer quem simula a parte)
+						local dist = (part.Position - target).Magnitude
+						h.responding = dist < 12 or (h.lastDist ~= nil and h.lastDist - dist > 0.5)
+						h.lastDist = dist
+					end
+
+					-- vigia o tempo todo: a parte continua sob a minha física?
+					if heldMine(h) then
+						h.lostSince = nil
+						h.attempts = 0
+						h.gaveUp = nil
+					else
+						h.lostSince = h.lostSince or now
 					end
 				end
 			end
+			reclaimLost() -- se alguma perdeu a minha física, tenta recuperar
 		elseif os.clock() < claimUntil then
 			claimPhysics()
 		end
@@ -2399,6 +2633,33 @@ local function buildTelecinese()
 		end
 	end
 
+	-- enquanto a telecinese está ligada, não deixa o personagem sentar em assentos (carros, bancos...)
+	local function guardSeat()
+		local char = player.Character
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		if not hum then return end
+		if seatSaved[hum] == nil then
+			seatSaved[hum] = hum:GetStateEnabled(Enum.HumanoidStateType.Seated)
+			hum:SetStateEnabled(Enum.HumanoidStateType.Seated, false)
+		end
+		if hum.Sit or hum.SeatPart then
+			local seat = hum.SeatPart
+			local weld = seat and seat:FindFirstChild("SeatWeld")
+			if weld then weld:Destroy() end
+			hum.Sit = false
+			hum.Jump = true -- levanta do assento
+		end
+	end
+
+	local function restoreSeat()
+		for hum, enabled in pairs(seatSaved) do
+			if hum.Parent then
+				pcall(function() hum:SetStateEnabled(Enum.HumanoidStateType.Seated, enabled) end)
+			end
+			seatSaved[hum] = nil
+		end
+	end
+
 	local function disconnectAll()
 		for _, c in ipairs(connList) do c:Disconnect() end
 		table.clear(connList)
@@ -2410,6 +2671,7 @@ local function buildTelecinese()
 		table.insert(connList, UIS.InputEnded:Connect(onEnded))
 		table.insert(connList, RunService.Heartbeat:Connect(step))
 		table.insert(connList, RunService.RenderStepped:Connect(updateAim))
+		table.insert(connList, RunService.Heartbeat:Connect(guardSeat))
 	end
 
 	-- limpar: solta a parte, tira a seleção, apaga qualquer controle que tenha sobrado e reinicia as conexões
@@ -2524,7 +2786,7 @@ local function buildTelecinese()
 	cleanBtn.face.Activated:Connect(resetAll)
 
 	local function statusText()
-		if grabbing then return "Pegando... (teleportando até a parte)" end
+		if grabbing then return tripText end
 		if #helds == 1 then return "Segurando: " .. helds[1].part.Name .. ". Mire e jogue." end
 		if #helds > 1 then return "Segurando " .. #helds .. " partes. Mire e jogue." end
 		if selected then
@@ -2585,6 +2847,7 @@ local function buildTelecinese()
 			connectAll()
 		else
 			disconnectAll()
+			restoreSeat()
 			grabToken += 1
 			releaseHeld()
 			clearSelection()
