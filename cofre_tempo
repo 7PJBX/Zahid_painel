@@ -1,0 +1,588 @@
+-- ===== COFRE DO TEMPO =====
+-- Menu simples: escreva um título e uma informação, escolha por quanto tempo ela fica trancada e toque em "salvar".
+-- O código guarda a data e a hora exatas (até os segundos). Na lista "Salvos" só aparece o título, com asteriscos no
+-- lugar da informação e uma contagem regressiva. Quando o tempo acaba, o botão "resgatar" libera a informação
+-- (ela aparece na tela e é copiada para a área de transferência, se o executor permitir).
+-- Os salvos ficam em um arquivo (writefile/readfile do executor) e continuam lá quando você entra de novo.
+-- Obs.: a trava é só do menu (a informação fica guardada no arquivo) e usa o relógio do aparelho.
+
+local Players = game:GetService("Players")
+local UIS = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local HttpService = game:GetService("HttpService")
+local player = Players.LocalPlayer
+
+-- ===== TEMPOS DISPONÍVEIS =====
+local DURATIONS = {
+	{ label = "1 minuto", seconds = 60 },
+	{ label = "1 hora", seconds = 3600 },
+	{ label = "4 horas", seconds = 4 * 3600 },
+	{ label = "8 horas", seconds = 8 * 3600 },
+	{ label = "16 horas", seconds = 16 * 3600 },
+	{ label = "24 horas", seconds = 24 * 3600 },
+	{ label = "48 horas", seconds = 48 * 3600 },
+	{ label = "7 dias", seconds = 7 * 86400 },
+}
+local durIndex = 2 -- começa em "1 hora"
+
+-- ===== CORES (mesmo estilo escuro do menu Zahid) =====
+local T = {
+	font = Enum.Font.GothamMedium,
+	panelTop = Color3.fromRGB(12, 12, 15),
+	panelBottom = Color3.fromRGB(24, 24, 29),
+	scroll = Color3.fromRGB(90, 90, 100),
+	text = Color3.fromRGB(225, 225, 232),
+	textDim = Color3.fromRGB(140, 140, 150),
+	faceOff = Color3.fromRGB(52, 52, 60),
+	baseOff = Color3.fromRGB(26, 26, 31),
+	faceNet = Color3.fromRGB(44, 100, 108),
+	baseNet = Color3.fromRGB(22, 50, 56),
+	faceLock = Color3.fromRGB(40, 40, 46),
+	baseLock = Color3.fromRGB(24, 24, 28),
+	field = Color3.fromRGB(34, 34, 41),
+	card = Color3.fromRGB(32, 32, 38),
+	red = Color3.fromRGB(255, 110, 110),
+	green = Color3.fromRGB(120, 230, 150),
+}
+
+-- ===== FUNÇÕES AUXILIARES =====
+local function tween(obj, time, props, style, dir)
+	local tw = TweenService:Create(obj, TweenInfo.new(time, style or Enum.EasingStyle.Quad, dir or Enum.EasingDirection.Out), props)
+	tw:Play()
+	return tw
+end
+
+local function isPress(input)
+	return input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch
+end
+
+local function nowTs()
+	return DateTime.now().UnixTimestamp
+end
+
+-- data e hora no horário do aparelho: 18/10/2026 14:32:07
+local function fmtDate(ts)
+	local ok, s = pcall(function()
+		return DateTime.fromUnixTimestamp(ts):FormatLocalTime("DD/MM/YYYY HH:mm:ss", "pt-br")
+	end)
+	if ok then return s end
+	return os.date("!%d/%m/%Y %H:%M:%S", ts) .. " UTC"
+end
+
+-- contagem regressiva: 07:59:12 ou 6d 23:59:59
+local function fmtRemaining(sec)
+	local d = math.floor(sec / 86400)
+	local h = math.floor((sec % 86400) / 3600)
+	local m = math.floor((sec % 3600) / 60)
+	local s = math.floor(sec % 60)
+	if d > 0 then return string.format("%dd %02d:%02d:%02d", d, h, m, s) end
+	return string.format("%02d:%02d:%02d", h, m, s)
+end
+
+local function trim(s)
+	return (s:gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+-- copia para a área de transferência (só se o executor tiver a função)
+local function copyText(s)
+	local fn = setclipboard or toclipboard or writeclipboard
+	if fn then
+		return (pcall(fn, s))
+	end
+	return false
+end
+
+-- troca o texto de um botão por um instante e depois devolve o original
+local function flashText(face, text, color)
+	local old, oldColor = face.Text, face.TextColor3
+	face.Text = text
+	face.TextColor3 = color or T.text
+	task.delay(1.3, function()
+		if face.Parent and face.Text == text then
+			face.Text = old
+			face.TextColor3 = oldColor
+		end
+	end)
+end
+
+-- ===== BOTÃO 3D (igual ao do menu Zahid) =====
+-- dois retângulos arredondados: o corpo (escuro) fica parado e a face (clara) desce por cima dele ao apertar
+local DEPTH = 4
+local pressedFaces = {}
+
+-- ao soltar o dedo/mouse em qualquer lugar, todas as faces apertadas voltam para cima
+UIS.InputEnded:Connect(function(input)
+	if not isPress(input) then return end
+	for face in pairs(pressedFaces) do
+		pressedFaces[face] = nil
+		tween(face, 0.14, { Position = UDim2.fromOffset(0, 0) }, Enum.EasingStyle.Back)
+	end
+end)
+
+local function new3DButton(parent, text, position, size, faceColor, baseColor)
+	local holder = Instance.new("Frame")
+	holder.BackgroundTransparency = 1
+	holder.BorderSizePixel = 0
+	holder.Position = position
+	holder.Size = size
+	holder.Parent = parent
+
+	local faceH = size.Y.Offset - DEPTH
+
+	local base = Instance.new("Frame")
+	base.Size = UDim2.new(1, 0, 0, faceH)
+	base.Position = UDim2.fromOffset(0, DEPTH)
+	base.BackgroundColor3 = baseColor
+	base.BorderSizePixel = 0
+	base.Parent = holder
+	Instance.new("UICorner", base).CornerRadius = UDim.new(0, 10)
+
+	local face = Instance.new("TextButton")
+	face.Size = UDim2.new(1, 0, 0, faceH)
+	face.Position = UDim2.fromOffset(0, 0)
+	face.BackgroundColor3 = faceColor
+	face.BorderSizePixel = 0
+	face.AutoButtonColor = false
+	face.Font = T.font
+	face.TextColor3 = T.text
+	face.TextSize = 15
+	face.TextTruncate = Enum.TextTruncate.AtEnd
+	face.Text = text
+	face.Parent = holder
+	Instance.new("UICorner", face).CornerRadius = UDim.new(0, 10)
+
+	face.InputBegan:Connect(function(input)
+		if isPress(input) then
+			pressedFaces[face] = true
+			tween(face, 0.06, { Position = UDim2.fromOffset(0, DEPTH) })
+		end
+	end)
+
+	local obj = { holder = holder, base = base, face = face }
+
+	function obj.setColors(faceCol, baseCol, textCol)
+		tween(face, 0.2, { BackgroundColor3 = faceCol, TextColor3 = textCol })
+		tween(base, 0.2, { BackgroundColor3 = baseCol })
+	end
+
+	return obj
+end
+
+-- ===== DADOS (guardados em arquivo para sobreviver ao fechar o jogo) =====
+local FILE = "CofreDoTempo_" .. player.UserId .. ".json"
+local canFile = (writefile and readfile and isfile) and true or false
+local entries = {}
+local nextId = 1
+
+local function persist()
+	if not canFile then return end
+	pcall(function() writefile(FILE, HttpService:JSONEncode(entries)) end)
+end
+
+if canFile then
+	local ok, data = pcall(function()
+		if not isfile(FILE) then return nil end
+		return HttpService:JSONDecode(readfile(FILE))
+	end)
+	if ok and type(data) == "table" then
+		for _, e in ipairs(data) do
+			if type(e) == "table" and type(e.title) == "string" and type(e.info) == "string"
+				and type(e.savedAt) == "number" and type(e.seconds) == "number" then
+				e.id = type(e.id) == "number" and e.id or nextId
+				e.label = type(e.label) == "string" and e.label or ""
+				e.redeemed = e.redeemed == true
+				table.insert(entries, e)
+				nextId = math.max(nextId, e.id + 1)
+			end
+		end
+	end
+end
+
+-- ===== JANELA =====
+local old = player:WaitForChild("PlayerGui"):FindFirstChild("CofreDoTempo")
+if old then old:Destroy() end
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "CofreDoTempo"
+gui.ResetOnSpawn = false
+gui.DisplayOrder = 50
+gui.Parent = player:WaitForChild("PlayerGui")
+
+local W = 330
+local HEADER_H = 40
+local viewport = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(800, 600)
+local H = math.clamp(viewport.Y - 40, 260, 460)
+
+local window = Instance.new("Frame")
+window.Size = UDim2.fromOffset(W, H)
+window.Position = UDim2.new(0.5, -W / 2, 0.5, -H / 2)
+window.BackgroundColor3 = Color3.new(1, 1, 1)
+window.BorderSizePixel = 0
+window.Active = true
+window.Parent = gui
+Instance.new("UICorner", window).CornerRadius = UDim.new(0, 14)
+local grad = Instance.new("UIGradient")
+grad.Color = ColorSequence.new(T.panelTop, T.panelBottom)
+grad.Rotation = 90
+grad.Parent = window
+
+-- cabeçalho (arraste por aqui para mover a janela)
+local header = Instance.new("Frame")
+header.Size = UDim2.new(1, 0, 0, HEADER_H)
+header.BackgroundTransparency = 1
+header.Parent = window
+
+local headerTitle = Instance.new("TextLabel")
+headerTitle.Size = UDim2.new(1, -60, 1, 0)
+headerTitle.Position = UDim2.fromOffset(14, 0)
+headerTitle.BackgroundTransparency = 1
+headerTitle.Font = T.font
+headerTitle.TextSize = 18
+headerTitle.TextColor3 = T.text
+headerTitle.TextXAlignment = Enum.TextXAlignment.Left
+headerTitle.Text = "Cofre do tempo"
+headerTitle.Parent = header
+
+local minBtn = new3DButton(header, "-", UDim2.new(1, -46, 0, 6), UDim2.fromOffset(34, 30), T.faceOff, T.baseOff)
+
+local dragging, dragStart, startPos = false, nil, nil
+header.InputBegan:Connect(function(input)
+	if isPress(input) then
+		dragging = true
+		dragStart = input.Position
+		startPos = window.Position
+	end
+end)
+UIS.InputChanged:Connect(function(input)
+	if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+		or input.UserInputType == Enum.UserInputType.Touch) then
+		local d = input.Position - dragStart
+		window.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+	end
+end)
+UIS.InputEnded:Connect(function(input)
+	if isPress(input) then dragging = false end
+end)
+
+-- corpo rolável
+local body = Instance.new("ScrollingFrame")
+body.Size = UDim2.new(1, 0, 1, -HEADER_H)
+body.Position = UDim2.fromOffset(0, HEADER_H)
+body.BackgroundTransparency = 1
+body.BorderSizePixel = 0
+body.ScrollBarThickness = 4
+body.ScrollBarImageColor3 = T.scroll
+body.CanvasSize = UDim2.new()
+body.AutomaticCanvasSize = Enum.AutomaticSize.Y
+body.ScrollingDirection = Enum.ScrollingDirection.Y
+body.Parent = window
+
+local bodyLayout = Instance.new("UIListLayout")
+bodyLayout.Padding = UDim.new(0, 8)
+bodyLayout.SortOrder = Enum.SortOrder.LayoutOrder
+bodyLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+bodyLayout.Parent = body
+
+local bodyPad = Instance.new("UIPadding")
+bodyPad.PaddingLeft = UDim.new(0, 12)
+bodyPad.PaddingRight = UDim.new(0, 14)
+bodyPad.PaddingTop = UDim.new(0, 4)
+bodyPad.PaddingBottom = UDim.new(0, 12)
+bodyPad.Parent = body
+
+local collapsed = false
+minBtn.face.Activated:Connect(function()
+	collapsed = not collapsed
+	body.Visible = not collapsed
+	minBtn.face.Text = collapsed and "+" or "-"
+	window.Size = collapsed and UDim2.fromOffset(W, HEADER_H) or UDim2.fromOffset(W, H)
+end)
+
+-- ===== CAMPOS DE TEXTO =====
+local function newBox(height, placeholder, multi)
+	local box = Instance.new("TextBox")
+	box.Size = UDim2.new(1, 0, 0, height)
+	box.BackgroundColor3 = T.field
+	box.BorderSizePixel = 0
+	box.Font = T.font
+	box.TextSize = 14
+	box.TextColor3 = T.text
+	box.PlaceholderText = placeholder
+	box.PlaceholderColor3 = T.textDim
+	box.ClearTextOnFocus = false
+	box.TextXAlignment = Enum.TextXAlignment.Left
+	box.TextYAlignment = multi and Enum.TextYAlignment.Top or Enum.TextYAlignment.Center
+	box.MultiLine = multi or false
+	box.TextWrapped = multi or false
+	Instance.new("UICorner", box).CornerRadius = UDim.new(0, 10)
+	local pad = Instance.new("UIPadding")
+	pad.PaddingLeft = UDim.new(0, 10)
+	pad.PaddingRight = UDim.new(0, 10)
+	pad.PaddingTop = UDim.new(0, 8)
+	pad.PaddingBottom = UDim.new(0, 8)
+	pad.Parent = box
+	return box
+end
+
+local titleBox = newBox(36, "Título", false)
+titleBox.LayoutOrder = 1
+titleBox.Parent = body
+
+local infoBox = newBox(120, "Informação que vai ficar trancada...", true)
+infoBox.LayoutOrder = 2
+infoBox.Parent = body
+
+-- ===== LINHA: seletor de tempo + botão salvar =====
+local row = Instance.new("Frame")
+row.Size = UDim2.new(1, 0, 0, 38)
+row.BackgroundTransparency = 1
+row.LayoutOrder = 3
+row.Parent = body
+
+local prevBtn = new3DButton(row, "<", UDim2.fromOffset(0, 0), UDim2.fromOffset(30, 38), T.faceOff, T.baseOff)
+
+local durLabel = Instance.new("TextLabel")
+durLabel.Size = UDim2.fromOffset(98, 34)
+durLabel.Position = UDim2.fromOffset(34, 0)
+durLabel.BackgroundColor3 = T.field
+durLabel.BorderSizePixel = 0
+durLabel.Font = T.font
+durLabel.TextSize = 14
+durLabel.TextColor3 = T.text
+durLabel.Text = DURATIONS[durIndex].label
+durLabel.Parent = row
+Instance.new("UICorner", durLabel).CornerRadius = UDim.new(0, 10)
+
+local nextBtn = new3DButton(row, ">", UDim2.fromOffset(136, 0), UDim2.fromOffset(30, 38), T.faceOff, T.baseOff)
+local saveBtn = new3DButton(row, "salvar", UDim2.new(0, 174, 0, 0), UDim2.new(1, -174, 0, 38), T.faceNet, T.baseNet)
+
+local function setDuration(delta)
+	durIndex = ((durIndex - 1 + delta) % #DURATIONS) + 1
+	durLabel.Text = DURATIONS[durIndex].label
+end
+prevBtn.face.Activated:Connect(function() setDuration(-1) end)
+nextBtn.face.Activated:Connect(function() setDuration(1) end)
+
+-- ===== LISTA DE SALVOS =====
+local savedHeader = Instance.new("TextLabel")
+savedHeader.Size = UDim2.new(1, 0, 0, 22)
+savedHeader.BackgroundTransparency = 1
+savedHeader.Font = T.font
+savedHeader.TextSize = 15
+savedHeader.TextColor3 = T.textDim
+savedHeader.TextXAlignment = Enum.TextXAlignment.Left
+savedHeader.LayoutOrder = 4
+savedHeader.Parent = body
+
+local listFrame = Instance.new("Frame")
+listFrame.Size = UDim2.new(1, 0, 0, 0)
+listFrame.AutomaticSize = Enum.AutomaticSize.Y
+listFrame.BackgroundTransparency = 1
+listFrame.LayoutOrder = 5
+listFrame.Parent = body
+local listLayout = Instance.new("UIListLayout")
+listLayout.Padding = UDim.new(0, 8)
+listLayout.SortOrder = Enum.SortOrder.LayoutOrder
+listLayout.Parent = listFrame
+
+local cards = {} -- cartões na tela: { entry, update, destroy }
+
+local function refreshHeader()
+	savedHeader.Text = "Salvos (" .. #entries .. ")" .. (canFile and "" or "  -  sem arquivos: somem ao sair")
+	savedHeader.TextColor3 = canFile and T.textDim or T.red
+end
+
+local function label(parent, text, size, color, order, height, alignX)
+	local l = Instance.new("TextLabel")
+	l.Size = UDim2.new(1, 0, 0, height)
+	l.BackgroundTransparency = 1
+	l.Font = T.font
+	l.TextSize = size
+	l.TextColor3 = color
+	l.TextXAlignment = alignX or Enum.TextXAlignment.Left
+	l.TextTruncate = Enum.TextTruncate.AtEnd
+	l.Text = text
+	l.LayoutOrder = order
+	l.Parent = parent
+	return l
+end
+
+local function addCard(entry)
+	local card = Instance.new("Frame")
+	card.Size = UDim2.new(1, 0, 0, 0)
+	card.AutomaticSize = Enum.AutomaticSize.Y
+	card.BackgroundColor3 = T.card
+	card.BorderSizePixel = 0
+	card.LayoutOrder = -entry.id -- o mais novo fica no topo
+	card.Parent = listFrame
+	Instance.new("UICorner", card).CornerRadius = UDim.new(0, 12)
+	local pad = Instance.new("UIPadding")
+	pad.PaddingLeft = UDim.new(0, 10)
+	pad.PaddingRight = UDim.new(0, 10)
+	pad.PaddingTop = UDim.new(0, 8)
+	pad.PaddingBottom = UDim.new(0, 8)
+	pad.Parent = card
+	local lay = Instance.new("UIListLayout")
+	lay.Padding = UDim.new(0, 5)
+	lay.SortOrder = Enum.SortOrder.LayoutOrder
+	lay.Parent = card
+
+	-- linha 1: título (esquerda) + contagem regressiva (direita)
+	local top = Instance.new("Frame")
+	top.Size = UDim2.new(1, 0, 0, 22)
+	top.BackgroundTransparency = 1
+	top.LayoutOrder = 1
+	top.Parent = card
+	local titleLabel = label(top, entry.title, 16, T.text, 1, 22)
+	titleLabel.Size = UDim2.new(1, -100, 1, 0)
+	local countdown = label(top, "", 14, T.textDim, 2, 22, Enum.TextXAlignment.Right)
+	countdown.Size = UDim2.new(0, 96, 1, 0)
+	countdown.Position = UDim2.new(1, -96, 0, 0)
+
+	-- linha 2: asteriscos (trancado) ou a informação (depois de resgatar)
+	local locked = label(card, "************", 20, T.text, 2, 22)
+	local reveal = newBox(90, "", true)
+	reveal.LayoutOrder = 3
+	reveal.Visible = false
+	reveal.Parent = card
+	reveal.FocusLost:Connect(function() reveal.Text = entry.info end) -- só para selecionar/copiar, não editar
+
+	-- linha 3: data e hora do salvamento + tempo escolhido
+	label(card, "Salvo em " .. fmtDate(entry.savedAt) .. "  |  " .. entry.label, 12, T.textDim, 4, 16)
+
+	-- linha 4: botões
+	local btnRow = Instance.new("Frame")
+	btnRow.Size = UDim2.new(1, 0, 0, 36)
+	btnRow.BackgroundTransparency = 1
+	btnRow.LayoutOrder = 5
+	btnRow.Parent = card
+	local redeemBtn = new3DButton(btnRow, "resgatar", UDim2.fromOffset(0, 0), UDim2.new(1, 0, 0, 36), T.faceLock, T.baseLock)
+	local copyBtn = new3DButton(btnRow, "copiar", UDim2.fromOffset(0, 0), UDim2.new(0.5, -4, 0, 36), T.faceNet, T.baseNet)
+	local deleteBtn = new3DButton(btnRow, "apagar", UDim2.new(0.5, 4, 0, 0), UDim2.new(0.5, -4, 0, 36), T.faceOff, T.baseOff)
+	copyBtn.holder.Visible = false
+	deleteBtn.holder.Visible = false
+
+	local rec = { entry = entry }
+	local ready = nil -- true quando o tempo acabou (para só trocar a cor quando mudar)
+
+	local function showRevealed()
+		locked.Visible = false
+		reveal.Text = entry.info
+		reveal.Visible = true
+		redeemBtn.holder.Visible = false
+		copyBtn.holder.Visible = true
+		deleteBtn.holder.Visible = true
+		countdown.Text = "Resgatado"
+		countdown.TextColor3 = T.green
+	end
+
+	function rec.update()
+		if entry.redeemed then return end
+		local remaining = entry.savedAt + entry.seconds - nowTs()
+		if remaining > 0 then
+			countdown.Text = fmtRemaining(remaining)
+			if ready ~= false then
+				ready = false
+				redeemBtn.setColors(T.faceLock, T.baseLock, T.textDim)
+			end
+		else
+			countdown.Text = "Liberado!"
+			countdown.TextColor3 = T.green
+			if ready ~= true then
+				ready = true
+				redeemBtn.setColors(T.faceNet, T.baseNet, T.text)
+			end
+		end
+	end
+
+	function rec.destroy()
+		card:Destroy()
+	end
+
+	redeemBtn.face.Activated:Connect(function()
+		if entry.redeemed then return end
+		if nowTs() < entry.savedAt + entry.seconds then
+			flashText(redeemBtn.face, "ainda trancado", T.red) -- só resgata quando o tempo acabar
+			return
+		end
+		entry.redeemed = true
+		persist()
+		showRevealed()
+		if copyText(entry.info) then flashText(copyBtn.face, "copiado!", T.green) end
+	end)
+
+	copyBtn.face.Activated:Connect(function()
+		if copyText(entry.info) then
+			flashText(copyBtn.face, "copiado!", T.green)
+		else
+			flashText(copyBtn.face, "sem copiar", T.red) -- selecione o texto acima para copiar
+		end
+	end)
+
+	deleteBtn.face.Activated:Connect(function()
+		for i, e in ipairs(entries) do
+			if e == entry then
+				table.remove(entries, i)
+				break
+			end
+		end
+		for i, c in ipairs(cards) do
+			if c == rec then
+				table.remove(cards, i)
+				break
+			end
+		end
+		persist()
+		rec.destroy()
+		refreshHeader()
+	end)
+
+	if entry.redeemed then showRevealed() else rec.update() end
+	table.insert(cards, rec)
+end
+
+for _, e in ipairs(entries) do addCard(e) end
+refreshHeader()
+
+-- ===== SALVAR =====
+saveBtn.face.Activated:Connect(function()
+	local title = trim(titleBox.Text)
+	local info = infoBox.Text
+	if title == "" then
+		flashText(saveBtn.face, "falta o título", T.red)
+		return
+	end
+	if trim(info) == "" then
+		flashText(saveBtn.face, "falta a informação", T.red)
+		return
+	end
+
+	local d = DURATIONS[durIndex]
+	local entry = {
+		id = nextId,
+		title = title,
+		info = info,
+		savedAt = nowTs(), -- data, hora, minutos e segundos exatos do clique
+		seconds = d.seconds,
+		label = d.label,
+		redeemed = false,
+	}
+	nextId += 1
+	table.insert(entries, entry)
+	persist()
+	addCard(entry)
+	refreshHeader()
+
+	titleBox.Text = ""
+	infoBox.Text = ""
+	flashText(saveBtn.face, "salvo!", T.green)
+end)
+
+-- ===== CONTAGEM REGRESSIVA (atualiza todos os cartões a cada segundo) =====
+task.spawn(function()
+	while gui.Parent do
+		for _, rec in ipairs(cards) do rec.update() end
+		task.wait(1)
+	end
+end)
