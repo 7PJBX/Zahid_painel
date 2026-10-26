@@ -7,6 +7,12 @@ local HttpService = game:GetService("HttpService")
 local Lighting = game:GetService("Lighting")
 local player = Players.LocalPlayer
 
+-- já existe um menu aberto? então não abre outro (para reabrir, use o botão "fechar" do menu que está aberto)
+do
+	local pg = player:WaitForChild("PlayerGui")
+	if pg:FindFirstChild("MiniMenu") then return end
+end
+
 local conns = {}
 local flyState = {}
 
@@ -195,7 +201,7 @@ local function vfly(on)
 end
 
 -- ===== FLOAT (plataforma invisível sob os pés; Q desce / E sobe) =====
-local FLOAT_SPEED = 4 -- velocidade de subir/descer (studs por segundo; o TP ajuda usa a mesma)
+local FLOAT_SPEED = 10 -- velocidade de subir/descer (studs por segundo; o ajudar usa a mesma)
 local floatPart, floatY
 local floatUp, floatDown = false, false
 
@@ -442,13 +448,14 @@ local function httpGetBody(url)
 	return nil
 end
 
--- procura um servidor público diferente do atual e com vaga
+-- procura um servidor público com no mínimo 6 jogadores e o menor ping
+local MIN_PLAYERS = 6
 local function findOtherServer()
-	local candidates = {}
+	local best, bestPing = nil, math.huge
 	local cursor = nil
-	for _ = 1, 3 do -- até 3 páginas de 100 servidores
+	for _ = 1, 3 do -- até 3 páginas de 100 servidores (do mais cheio para o menos cheio)
 		local url = "https://games.roblox.com/v1/games/" .. game.PlaceId
-			.. "/servers/Public?sortOrder=Asc&excludeFullGames=true&limit=100"
+			.. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100"
 		if cursor then url = url .. "&cursor=" .. cursor end
 
 		local body = httpGetBody(url)
@@ -456,25 +463,75 @@ local function findOtherServer()
 		local ok, data = pcall(function() return HttpService:JSONDecode(body) end)
 		if not ok or type(data) ~= "table" or type(data.data) ~= "table" then break end
 
+		local lastPlaying = math.huge
 		for _, s in ipairs(data.data) do
-			if s.id ~= game.JobId and s.playing and s.maxPlayers and s.playing < s.maxPlayers - 1 then
-				table.insert(candidates, s.id)
+			if type(s.playing) == "number" then lastPlaying = s.playing end
+			if s.id ~= game.JobId and type(s.playing) == "number" and type(s.maxPlayers) == "number"
+				and s.playing >= MIN_PLAYERS and s.playing < s.maxPlayers - 1 then
+				local ping = type(s.ping) == "number" and s.ping or math.huge
+				if best == nil or ping < bestPing then
+					best, bestPing = s.id, ping
+				end
 			end
 		end
 
+		if lastPlaying < MIN_PLAYERS then break end -- as próximas páginas só têm servidores menores que isso
 		if type(data.nextPageCursor) ~= "string" then break end
 		cursor = data.nextPageCursor
 	end
-	if #candidates == 0 then return nil end
-	return candidates[math.random(#candidates)]
+	return best
 end
 
 -- entra em outro servidor; devolve true se o teleporte foi iniciado, ou false e o motivo
 local function serverHop()
 	local id = findOtherServer()
-	if not id then return false, "Sem servidor" end
+	if not id then return false, "Sem servidor 6+" end
 	local ok = pcall(function()
 		TeleportService:TeleportToPlaceInstance(game.PlaceId, id, player)
+	end)
+	if not ok then return false, "Falhou" end
+	return true
+end
+
+-- ===== SERVIDOR ANTERIOR (botão "voltar") =====
+-- Cada vez que o script abre em um servidor, o servidor em que ele estava antes (guardado no arquivo)
+-- vira o "último". O botão "voltar" teleporta para ele.
+local SERVERS_FILE = "ZahidPainel_servidores.json"
+local serversState = { current = nil, last = nil } -- cada um: { placeId, jobId }
+
+local function serversSave()
+	if not writefile then return end
+	pcall(function() writefile(SERVERS_FILE, HttpService:JSONEncode(serversState)) end)
+end
+
+do
+	local function valid(s)
+		return type(s) == "table" and type(s.placeId) == "number" and type(s.jobId) == "string"
+	end
+	if readfile and isfile then
+		local ok, data = pcall(function()
+			if not isfile(SERVERS_FILE) then return nil end
+			return HttpService:JSONDecode(readfile(SERVERS_FILE))
+		end)
+		if ok and type(data) == "table" then
+			if valid(data.last) then serversState.last = data.last end
+			if valid(data.current) then serversState.current = data.current end
+		end
+	end
+	-- se o servidor "atual" do arquivo é outro, é de lá que eu vim
+	if serversState.current and serversState.current.jobId ~= game.JobId then
+		serversState.last = serversState.current
+	end
+	serversState.current = { placeId = game.PlaceId, jobId = game.JobId }
+	serversSave()
+end
+
+-- volta para o último servidor em que eu estava; devolve true se o teleporte foi iniciado, ou false e o motivo
+local function backServer()
+	local s = serversState.last
+	if not s then return false, "Sem servidor anterior" end
+	local ok = pcall(function()
+		TeleportService:TeleportToPlaceInstance(s.placeId, s.jobId, player)
 	end)
 	if not ok then return false, "Falhou" end
 	return true
@@ -887,7 +944,6 @@ local options = {
 	{ name = "TPTool",    fn = tpTool },
 	{ name = "VFly",      fn = vfly },
 	{ name = "Fly",       fn = fly },
-	{ name = "FPS",       fn = fpsBoost },
 	{ name = "Float",     fn = floatToggle },
 }
 
@@ -1334,10 +1390,11 @@ local ROW_TP = #options + 4
 local ROW_HELP = #options + 5
 local ROW_REJOIN = #options + 6
 local ROW_HOP = #options + 7
-local ROW_SETPOS = #options + 8
-local ROW_FARM = #options + 9
-local ROW_PARTS = #options + 10
-local CONTENT_H = rowY(ROW_PARTS) + ROW_H + 6 -- altura total do conteúdo rolável
+local ROW_BACK = #options + 8
+local ROW_SETPOS = #options + 9
+local ROW_FARM = #options + 10
+local ROW_CLOSE = #options + 11
+local CONTENT_H = rowY(ROW_CLOSE) + ROW_H + 6 -- altura total do conteúdo rolável
 
 local panel = Instance.new("Frame")
 panel.Size = UDim2.fromOffset(PANEL_W, PANEL_H)
@@ -1441,6 +1498,9 @@ local rejoinBtn = new3DButton(content, "Rejoin", UDim2.fromOffset(8, rowY(ROW_RE
 local hopBtn = new3DButton(content, "Server hop", UDim2.fromOffset(8, rowY(ROW_HOP)),
 	UDim2.new(1, -16, 0, ROW_H), T.faceNet, T.baseNet)
 
+local backBtn = new3DButton(content, "voltar", UDim2.fromOffset(8, rowY(ROW_BACK)),
+	UDim2.new(1, -16, 0, ROW_H), T.faceNet, T.baseNet)
+
 local setPosBtn = new3DButton(content, "Definir posição", UDim2.fromOffset(8, rowY(ROW_SETPOS)),
 	UDim2.new(1, -16, 0, ROW_H), T.faceTp, T.baseTp)
 setPosBtn.face.TextTruncate = Enum.TextTruncate.AtEnd
@@ -1449,9 +1509,8 @@ local farmBtn = new3DButton(content, "Auto farm", UDim2.fromOffset(8, rowY(ROW_F
 	UDim2.new(1, -16, 0, ROW_H), T.faceOff, T.baseOff)
 farmBtn.face.TextTruncate = Enum.TextTruncate.AtEnd
 
-local partsBtn = new3DButton(content, "mover partes", UDim2.fromOffset(8, rowY(ROW_PARTS)),
+local closeBtn = new3DButton(content, "fechar", UDim2.fromOffset(8, rowY(ROW_CLOSE)),
 	UDim2.new(1, -16, 0, ROW_H), T.faceOff, T.baseOff)
-partsBtn.face.TextTruncate = Enum.TextTruncate.AtEnd
 
 -- texto do botão de teleporte (muda para os usuários da lista, pelo nome de usuário)
 local function updateTpText()
@@ -1646,13 +1705,30 @@ for _, p in ipairs(Players:GetPlayers()) do
 end
 Players.PlayerRemoving:Connect(function() task.defer(refreshList) end)
 
+-- ajudar: estado compartilhado com o botão "TP até o jogador" (declarado aqui para o botão enxergar)
+local helpOn = false
+local helpPauseFollow = false -- true enquanto eu seguro o botão "TP até o jogador" com o ajudar ligado
+
 tpBtn.face.Activated:Connect(function()
+	if helpOn then return end -- com o ajudar ligado, o botão só tem a função secreta (segurar), sem teleportar
 	local myHrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
 	local targetChar = selectedPlayer and selectedPlayer.Character
 	local targetHrp = targetChar and targetChar:FindFirstChild("HumanoidRootPart")
 	if myHrp and targetHrp then
 		myHrp.CFrame = targetHrp.CFrame * CFrame.new(0, 0, 3)
 	end
+end)
+
+-- função secreta (só vale com o "ajudar" ligado): enquanto eu SEGURO este botão, paro de seguir o jogador
+-- selecionado; quando solto, volto a segui-lo (para ele não cair)
+tpBtn.face.InputBegan:Connect(function(input)
+	if isPress(input) and helpOn then helpPauseFollow = true end
+end)
+tpBtn.face.InputEnded:Connect(function(input)
+	if isPress(input) then helpPauseFollow = false end
+end)
+UIS.InputEnded:Connect(function(input)
+	if isPress(input) then helpPauseFollow = false end
 end)
 
 refreshList()
@@ -1666,7 +1742,6 @@ local LIE_OFFSET = 3.5       -- do centro dele até o meu centro deitado (aument
 local FOLLOW_GAIN = 25       -- quão rápido acompanho o jogador na horizontal (maior = mais colado)
 local FOLLOW_MAX = 60        -- velocidade máxima desse acompanhamento (studs por segundo)
 local FOLLOW_SNAP = 40       -- se ele ficar mais longe que isso (ex.: se teleportou), vou direto para baixo dele
-local helpOn = false
 local helpState = nil        -- { bv, bg, hum, conn, yaw } enquanto o ajudar está ligado
 local helpApfPending = false -- o Anti Part Fling estava ligado e volta quando eu terminar
 
@@ -1690,6 +1765,7 @@ end
 local function stopHelp()
 	if not helpOn then return end
 	helpOn = false
+	helpPauseFollow = false
 	local s = helpState
 	helpState = nil
 	if s then
@@ -1791,7 +1867,7 @@ local function startHelp()
 		-- horizontal: acompanho o jogador selecionado (fico sempre embaixo dos pés dele)
 		local vx, vz = 0, 0
 		local t = targetRoot()
-		if t then
+		if t and not helpPauseFollow then -- segurando "TP até o jogador": paro de seguir
 			local pos, tpos = r.Position, t.Position
 			local ex, ez = tpos.X - pos.X, tpos.Z - pos.Z
 			if ex * ex + ez * ez > FOLLOW_SNAP * FOLLOW_SNAP then
@@ -1844,6 +1920,20 @@ hopBtn.face.Activated:Connect(function()
 	end)
 end)
 
+backBtn.face.Activated:Connect(function()
+	if netBusy then return end
+	netBusy = true
+	backBtn.face.Text = "Voltando..."
+	backBtn.setOn(true)
+	local ok, reason = backServer()
+	if not ok then backBtn.face.Text = reason or "Falhou" end
+	task.delay(ok and 10 or 1.5, function()
+		backBtn.face.Text = "voltar"
+		backBtn.setOn(false)
+		netBusy = false
+	end)
+end)
+
 -- ===== AUTO FARM (botões) =====
 setPosBtn.face.Activated:Connect(function()
 	local hrp = farmRoot()
@@ -1888,984 +1978,20 @@ task.spawn(function()
 	end
 end)
 
--- ===== TELECINESE (mini menu independente: pegar, mira, up/down, jogar) =====
--- Com o botão "telecinese" ligado, o mini menu abre ao lado do menu principal e continua aberto mesmo
--- que você feche o menu principal. Toque numa parte do mapa para selecionar:
---   borda VERMELHA = parte ancorada | borda AZUL = parte não ancorada.
--- pegar: você teleporta para bem perto da parte selecionada (assim o servidor passa a física dela para você),
---        começa a puxá-la e volta para onde estava; a parte vem e fica flutuando atrás e bem acima de você.
--- puxar vários: faz o mesmo, automaticamente, com até 5 partes soltas (as mais próximas de você).
--- mira : mostra a linha da trajetória do arremesso (vai para onde a câmera aponta); up/down ajustam a mira.
--- jogar: arremessa a parte segurada com a força definida em "power". Antes de jogar, confere se a parte está
---        sob a sua física; se não estiver, espera ela voltar (o código tenta recuperá-la o tempo todo).
--- Enquanto a telecinese está ligada, o personagem não consegue sentar em assentos.
--- limpar: reseta tudo (solta a parte, tira a seleção e reinicia os controles) para selecionar outra sem problemas.
--- (o bloco fica dentro de uma função para não estourar o limite de variáveis locais do script)
-local function buildTelecinese()
-	local power = 666       -- força do arremesso (velocidade inicial em studs por segundo). Maior = mais longe
-	local AIM_STEP_DEG = 3       -- quanto cada toque em up/down muda a mira (graus)
-	local AIM_LIMIT_DEG = 80     -- limite da mira para cima e para baixo (graus)
-	local HOLD_BACK = 8          -- distância atrás de você (studs, somada ao tamanho da parte)
-	local HOLD_UP = 20           -- altura acima de você (studs, somada à metade do tamanho da parte)
-	local PULL_SPEED_MAX = 1500  -- velocidade máxima com que a parte vem até você (studs por segundo)
-	local TAP_TOLERANCE = 12     -- pixels que o dedo pode mexer e ainda contar como "toque"
-	local RAY_LENGTH = 5000      -- alcance do toque para selecionar (studs)
-	local AIM_POINTS = 40        -- quantos trechos tem a linha da mira
-	local AIM_TIME_STEP = 0.06   -- tempo de voo (s) de cada trecho da linha da mira
-	local GRAB_WAIT_MAX = 1.5    -- tempo máximo (s) esperando cada parte responder depois do teleporte
-	local GRAB_EXTRA = 0.15      -- tempo extra (s) perto da parte depois que ela começa a vir
-	local MULTI_MAX = 5          -- quantas partes o "puxar vários" pega, no máximo
-	local MULTI_MIN_SIZE = 2     -- ignora partes muito pequenas (tamanho total menor que isso)
-	local RECLAIM_AFTER = 1.0    -- segundos sem a física da parte antes de tentar recuperá-la por teleporte
-	local RECLAIM_COOLDOWN = 3   -- intervalo mínimo (s) entre tentativas de recuperação
-	local MAX_RECLAIM = 3        -- quantas vezes tenta recuperar a mesma parte antes de desistir
-	local THROW_WAIT_MAX = 8     -- tempo máximo (s) esperando a parte voltar para a sua física antes de jogar
-	local RED = Color3.fromRGB(255, 60, 60)
-	local BLUE = Color3.fromRGB(70, 140, 255)
-	local NOTICE_RED = Color3.fromRGB(255, 110, 110)
-	local WAIT_YELLOW = Color3.fromRGB(255, 205, 100)
-	local CLEAN_GREEN = Color3.fromRGB(120, 230, 150)
-	local MINI_W, MINI_H = PANEL_W, 278
-
-	local on = false
-	local selected, highlight
-	local helds = {}        -- partes que estou segurando: { part, att, ap, ao, rel, up, back, side, saved }
-	local grabbing = false  -- true enquanto o teleporte de "pegar" está acontecendo
-	local grabToken = 0     -- muda para cancelar um "pegar" em andamento
-	local tripText = ""     -- texto de estado durante a viagem de teleporte
-	local throwing = false  -- true enquanto o "jogar" espera as partes ficarem sob a sua física
-	local lastReclaim = 0
-	local seatSaved = {}    -- [humanoid] = estado "Seated" original (para devolver ao desligar)
-	local aimOn = false
-	local aimPitch = 0      -- ajuste da mira (graus): positivo = para cima
-	local aimFolder, aimSegs, aimEnd
-	local claimUntil = 0
-	local press
-	local pointer = Vector2.zero
-	local connList = {}
-	local menu, status, info, aimBtn
-	local noticeUntil = 0
-	local noticeActive = false
-	local created = {}      -- controles criados por mim (a limpeza apaga todos)
-
-	local function getRoot()
-		return player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+-- ===== FECHAR (desliga tudo e apaga o menu) =====
+-- Depois de fechar, o script pode ser executado de novo (a verificação do início não acha mais nenhum menu aberto).
+closeBtn.face.Activated:Connect(function()
+	-- desliga o que estiver ligado
+	pcall(function() if helpOn then stopHelp() end end)
+	for _, setState in pairs(toggles) do pcall(setState, false) end
+	pcall(function() if farmOn then farmEnable(false) end end)
+	-- solta as conexões que o script guardou e apaga o menu
+	for key, c in pairs(conns) do
+		pcall(function() c:Disconnect() end)
+		conns[key] = nil
 	end
-
-	local function isAnchored(part)
-		if part.Anchored then return true end
-		local root = part.AssemblyRootPart
-		return root ~= nil and root.Anchored
-	end
-
-	-- o toque está em cima do meu menu?
-	local function overMenu(pos)
-		local pg = player:FindFirstChildOfClass("PlayerGui")
-		local ui = pg and pg:FindFirstChild("MiniMenu")
-		if not ui then return false end
-		for _, obj in ipairs(pg:GetGuiObjectsAtPosition(pos.X, pos.Y)) do
-			if obj:IsDescendantOf(ui) then return true end
-		end
-		return false
-	end
-
-	local function belongsToPlayer(inst)
-		local m = inst
-		while m and m ~= workspace do
-			if m:IsA("Model") and Players:GetPlayerFromCharacter(m) then return true end
-			m = m.Parent
-		end
-		return false
-	end
-
-	-- qual parte do mapa está sob o dedo
-	local function pick(pos)
-		local cam = workspace.CurrentCamera
-		local ray = cam:ScreenPointToRay(pos.X, pos.Y)
-		local params = RaycastParams.new()
-		params.FilterType = Enum.RaycastFilterType.Exclude
-		local ignore = {}
-		if player.Character then table.insert(ignore, player.Character) end
-		if floatPart then table.insert(ignore, floatPart) end
-		params.FilterDescendantsInstances = ignore
-		local result = workspace:Raycast(ray.Origin, ray.Direction * RAY_LENGTH, params)
-		local inst = result and result.Instance
-		if not inst or not inst:IsA("BasePart") or inst:IsA("Terrain") then return nil end
-		if belongsToPlayer(inst) then return nil end
-		return inst
-	end
-
-	local function clearSelection()
-		if highlight then highlight:Destroy() highlight = nil end
-		selected = nil
-	end
-
-	local function selectPart(part)
-		clearSelection()
-		selected = part
-		local hl = Instance.new("Highlight")
-		hl.Adornee = part
-		hl.FillTransparency = 1
-		hl.OutlineTransparency = 0
-		hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-		hl.OutlineColor = isAnchored(part) and RED or BLUE
-		hl.Parent = part
-		highlight = hl
-	end
-
-	-- pisca o preenchimento da seleção (aviso rápido)
-	local function flash(color)
-		local hl = highlight
-		if not hl then return end
-		hl.FillColor = color
-		hl.FillTransparency = 0.5
-		task.delay(0.25, function()
-			if hl.Parent then hl.FillTransparency = 1 end
-		end)
-	end
-
-	-- aviso no texto do mini menu (vermelho, some sozinho)
-	local function notice(text, color)
-		status.Text = text
-		status.TextColor3 = color or NOTICE_RED
-		noticeUntil = os.clock() + 1.8
-		noticeActive = true
-	end
-
-	-- fica com a física das partes soltas, mesmo longe (precisa repetir a cada frame)
-	local function claimPhysics()
-		pcall(function() player.MaximumSimulationRadius = 1e9 end)
-		if sethiddenproperty then pcall(sethiddenproperty, player, "SimulationRadius", 1e9) end
-		if setsimulationradius then pcall(setsimulationradius, 1e9, 1e9) end
-	end
-
-	-- true/false se o executor sabe dizer se EU simulo a parte (a física dela está comigo); nil se não sabe
-	local function ownershipExplicit(part)
-		if isnetworkowner then
-			local ok, res = pcall(isnetworkowner, part)
-			if ok then return res == true end
-		end
-		if gethiddenproperty then
-			local ok, age = pcall(gethiddenproperty, part, "ReceiveAge")
-			if ok and type(age) == "number" then return age == 0 end
-		end
-		return nil
-	end
-
-	-- a parte segurada está sob a minha física? (sem as funções do executor, considera que sim quando
-	-- ela está respondendo: perto do ponto onde deve ficar ou chegando até ele)
-	local function heldMine(h)
-		local st = ownershipExplicit(h.part)
-		if st ~= nil then return st end
-		return h.responding == true
-	end
-
-	-- (altura, distância atrás) da parte em relação a mim; partes grandes ficam mais longe
-	local function holdOffsets(part)
-		local r = part and (part.Size.Magnitude / 2) or 1
-		return HOLD_UP + r * 0.5, HOLD_BACK + r
-	end
-
-	-- ponto do mundo onde a parte fica: atrás de mim (para onde eu NÃO olho), bem acima e deslocada para o lado
-	local function holdPoint(hrp, up, back, side)
-		local look = hrp.CFrame.LookVector
-		local flat = Vector3.new(look.X, 0, look.Z)
-		if flat.Magnitude < 0.05 then flat = Vector3.new(0, 0, -1) else flat = flat.Unit end
-		local right = flat:Cross(Vector3.new(0, 1, 0))
-		return hrp.Position + flat * back + Vector3.new(0, up, 0) + right * (side or 0)
-	end
-
-	-- guarda o controle criado, para a limpeza conseguir apagar tudo
-	local function register(inst)
-		if #created > 60 then
-			for i = #created, 1, -1 do
-				if not created[i].Parent then table.remove(created, i) end
-			end
-		end
-		table.insert(created, inst)
-	end
-
-	-- ===== segurar partes =====
-	local function buildHold(h)
-		local part = h.part
-		if h.ap then h.ap:Destroy() end
-		if h.ao then h.ao:Destroy() end
-		if h.att then h.att:Destroy() end
-
-		local att = Instance.new("Attachment")
-		att.Parent = part
-
-		local ap = Instance.new("AlignPosition")
-		ap.Mode = Enum.PositionAlignmentMode.OneAttachment
-		ap.Attachment0 = att
-		ap.RigidityEnabled = false
-		ap.MaxForce = math.huge
-		ap.MaxVelocity = PULL_SPEED_MAX
-		ap.Responsiveness = 60
-		ap.Position = part.Position
-		ap.Parent = part
-
-		local ao = Instance.new("AlignOrientation")
-		ao.Mode = Enum.OrientationAlignmentMode.OneAttachment
-		ao.Attachment0 = att
-		ao.MaxTorque = math.huge
-		ao.Responsiveness = 20
-		ao.CFrame = part.CFrame.Rotation
-		ao.Parent = part
-
-		h.att, h.ap, h.ao = att, ap, ao
-		register(att)
-		register(ap)
-		register(ao)
-	end
-
-	-- começa a segurar uma parte (sem colisão enquanto ela é segurada)
-	local function addHold(part, up, back, side, hrp)
-		local saved = { [part] = part.CanCollide }
-		for _, q in ipairs(part:GetConnectedParts(true)) do saved[q] = q.CanCollide end
-		for q in pairs(saved) do q.CanCollide = false end
-
-		local h = {
-			part = part,
-			up = up,
-			back = back,
-			side = side,
-			rel = hrp.CFrame.Rotation:Inverse() * part.CFrame.Rotation, -- mantém a rotação em relação a mim
-			saved = saved,
-		}
-		buildHold(h)
-		table.insert(helds, h)
-		return h
-	end
-
-	local function destroyHold(h)
-		if h.ap then h.ap:Destroy() end
-		if h.ao then h.ao:Destroy() end
-		if h.att then h.att:Destroy() end
-		for q, cc in pairs(h.saved) do
-			if q.Parent then q.CanCollide = cc end
-		end
-	end
-
-	-- solta uma parte
-	local function removeHold(h)
-		for i, x in ipairs(helds) do
-			if x == h then
-				table.remove(helds, i)
-				break
-			end
-		end
-		destroyHold(h)
-	end
-
-	-- solta todas; devolve a lista do que estava segurado
-	local function releaseHeld()
-		local list = helds
-		helds = {}
-		for _, h in ipairs(list) do destroyHold(h) end
-		return list
-	end
-
-	-- espera a parte ficar sob a minha física (até GRAB_WAIT_MAX segundos); true se ficou
-	local function waitOwned(h, token)
-		local part = h.part
-		local start = part.Position
-		local t0 = os.clock()
-		while os.clock() - t0 < GRAB_WAIT_MAX and token == grabToken do
-			RunService.Heartbeat:Wait()
-			claimPhysics()
-			local st = ownershipExplicit(part)
-			if st == true then return true end
-			if st == nil and (part.Position - start).Magnitude > 2 then return true end
-		end
-		return false
-	end
-
-	-- viagem de teleporte: vai para bem perto de cada parte, espera ela ficar sob a minha física e volta
-	-- para onde eu estava. list = partes novas para pegar | reclaim = partes já seguradas que perderam a minha física
-	local function startTrip(list, reclaim)
-		if grabbing then
-			notice("Aguarde, ainda pegando...")
-			return false
-		end
-		if farmOn then
-			notice("Desligue o auto farm antes de pegar.")
-			return false
-		end
-		local hrp = getRoot()
-		local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
-		if not hrp or not hum then return false end
-
-		grabbing = true
-		tripText = reclaim and "Recuperando a física da parte..." or "Pegando... (teleportando até a parte)"
-		grabToken += 1
-		local token = grabToken
-		local home = hrp.CFrame
-		local n = list and #list or 0
-
-		-- as partes novas ficam lado a lado atrás de mim
-		local maxSize = 0
-		for _, p in ipairs(list or {}) do maxSize = math.max(maxSize, p.Size.Magnitude) end
-		local spacing = maxSize + 3
-
-		task.spawn(function()
-			-- o Anti Part Fling me tiraria do lugar durante o teleporte: pausa e religa no fim
-			local apfWas = apfActive
-			if apfWas then toggles["Anti Part Fling"](false) end
-			noclip(true)
-			local bv
-			if flyState.fly == nil and flyState.vfly == nil then
-				bv = Instance.new("BodyVelocity") -- me segura parado no ar enquanto espero
-				bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
-				bv.Velocity = Vector3.zero
-				bv.Parent = hrp
-			end
-
-			local function goNear(part)
-				hrp.CFrame = CFrame.new(part.Position + Vector3.new(0, 3, 0)) * home.Rotation
-				hrp.AssemblyLinearVelocity = Vector3.zero
-				hrp.AssemblyAngularVelocity = Vector3.zero
-				claimPhysics()
-			end
-
-			local failed = 0
-			pcall(function()
-				if reclaim then
-					-- recupera a física das partes que já estou segurando
-					for _, h in ipairs(reclaim) do
-						if token ~= grabToken or not hrp.Parent then break end
-						if h.part.Parent then
-							goNear(h.part)
-							buildHold(h) -- controles novos
-							if waitOwned(h, token) then
-								task.wait(GRAB_EXTRA)
-							else
-								failed += 1
-							end
-						end
-					end
-				else
-					-- pega partes novas
-					for i, part in ipairs(list) do
-						if token ~= grabToken or not hrp.Parent then break end
-						if part.Parent then
-							goNear(part)
-							local up, back = holdOffsets(part)
-							local h = addHold(part, up, back, (i - (n + 1) / 2) * spacing, hrp)
-							if waitOwned(h, token) then
-								task.wait(GRAB_EXTRA)
-							else
-								removeHold(h)
-								failed += 1
-							end
-						end
-					end
-				end
-			end)
-
-			-- volta para onde eu estava
-			if hrp.Parent then
-				hrp.CFrame = home
-				hrp.AssemblyLinearVelocity = Vector3.zero
-				hrp.AssemblyAngularVelocity = Vector3.zero
-			end
-			task.wait(0.05)
-			if bv then bv:Destroy() end
-			noclip(false)
-			if apfWas then toggles["Anti Part Fling"](true) end
-			grabbing = false
-
-			if token == grabToken then
-				if reclaim then
-					if failed == 0 then notice("Física da parte recuperada.", CLEAN_GREEN) end
-				elseif #helds == 0 then
-					notice("Nenhuma parte obedeceu (o servidor controla a física delas).")
-				elseif failed > 0 then
-					notice(#helds .. " partes pegas, " .. failed .. " não obedeceram.", CLEAN_GREEN)
-				elseif #helds == 1 then
-					notice("Parte pega!", CLEAN_GREEN)
-				else
-					notice(#helds .. " partes pegas!", CLEAN_GREEN)
-				end
-			end
-		end)
-		return true
-	end
-
-	-- pegar partes novas (só se eu ainda não estiver segurando nada)
-	local function grabByTeleport(list)
-		if grabbing then
-			notice("Aguarde, ainda pegando...")
-			return
-		end
-		if #helds > 0 then
-			notice("Você já está com partes. Jogue ou limpe.")
-			return
-		end
-		startTrip(list, nil)
-	end
-
-	-- vigia: se alguma parte segurada deixou de ser minha por um tempo, volta lá por teleporte para recuperá-la
-	local function reclaimLost()
-		if grabbing then return end
-		local now = os.clock()
-		if now - lastReclaim < RECLAIM_COOLDOWN then return end
-		local lost = {}
-		for _, h in ipairs(helds) do
-			if h.lostSince and now - h.lostSince > RECLAIM_AFTER and h.part.Parent then
-				if (h.attempts or 0) < MAX_RECLAIM then
-					table.insert(lost, h)
-				elseif not h.gaveUp then
-					h.gaveUp = true
-					notice("Não consegui manter a física de uma parte.")
-				end
-			end
-		end
-		if #lost == 0 then return end
-		lastReclaim = now
-		for _, h in ipairs(lost) do h.attempts = (h.attempts or 0) + 1 end
-		startTrip(nil, lost)
-	end
-
-	-- pegar: a parte selecionada
-	local function grabSelected()
-		local part = selected
-		if not part or not part.Parent then
-			notice("Selecione uma parte primeiro.")
-			return
-		end
-		if isAnchored(part) then
-			flash(RED)
-			notice("Parte ancorada: não dá para pegar.")
-			return
-		end
-		grabByTeleport({ part })
-	end
-
-	-- puxar vários: até MULTI_MAX partes soltas, as mais próximas de mim
-	local function grabMany()
-		local hrp = getRoot()
-		if not hrp then return end
-		if grabbing or #helds > 0 then
-			grabByTeleport({}) -- só mostra o aviso certo
-			return
-		end
-
-		local cam = workspace.CurrentCamera
-		local seen, cands = {}, {}
-		for _, inst in ipairs(workspace:GetDescendants()) do
-			if inst:IsA("BasePart") and not inst:IsA("Terrain") and not inst.Anchored
-				and inst.Size.Magnitude >= MULTI_MIN_SIZE then
-				local root = inst.AssemblyRootPart or inst
-				if not seen[root] and not root.Anchored
-					and not (player.Character and inst:IsDescendantOf(player.Character))
-					and not (floatPart and inst == floatPart)
-					and not (aimFolder and inst:IsDescendantOf(aimFolder))
-					and not (cam and inst:IsDescendantOf(cam))
-					and not belongsToPlayer(inst) then
-					seen[root] = true
-					table.insert(cands, { part = root, d = (root.Position - hrp.Position).Magnitude })
-				end
-			end
-		end
-		if #cands == 0 then
-			notice("Nenhuma parte solta encontrada.")
-			return
-		end
-		table.sort(cands, function(a, b) return a.d < b.d end)
-
-		local list = {}
-		for i = 1, math.min(MULTI_MAX, #cands) do list[i] = cands[i].part end
-		grabByTeleport(list)
-	end
-
-	-- direção da câmera com o ajuste da mira (up/down)
-	local function aimDirection()
-		local cam = workspace.CurrentCamera
-		local rot = CFrame.fromAxisAngle(cam.CFrame.RightVector, math.rad(aimPitch))
-		return rot:VectorToWorldSpace(cam.CFrame.LookVector)
-	end
-
-	-- jogar: confere se cada parte está sob a minha física; se não estiver, espera ela voltar para só então jogar
-	local function throwPart()
-		if #helds == 0 then
-			notice("Pegue uma parte primeiro.")
-			return
-		end
-		if throwing then return end
-		if grabbing then
-			notice("Aguarde, ainda pegando...")
-			return
-		end
-		throwing = true
-		local token = grabToken
-		local dir = aimDirection() -- a direção é a do momento do clique
-		task.spawn(function()
-			local deadline = os.clock() + THROW_WAIT_MAX
-			local lastNote = 0
-			while os.clock() < deadline and token == grabToken and #helds > 0 do
-				local allMine = true
-				for _, h in ipairs(helds) do
-					if not heldMine(h) then
-						allMine = false
-						break
-					end
-				end
-				if allMine then break end
-				if os.clock() - lastNote > 1.5 then
-					lastNote = os.clock()
-					notice("Esperando a parte voltar para a sua física...", WAIT_YELLOW)
-				end
-				RunService.Heartbeat:Wait()
-			end
-			throwing = false
-			if token ~= grabToken or #helds == 0 then return end
-
-			-- joga só as partes que estão sob a minha física
-			local total = #helds
-			local thrown = 0
-			for _, h in ipairs(table.clone(helds)) do
-				if heldMine(h) then
-					local part = h.part
-					removeHold(h)
-					if part.Parent then
-						part.AssemblyAngularVelocity = Vector3.zero
-						part.AssemblyLinearVelocity = dir * power
-					end
-					thrown += 1
-				end
-			end
-			if thrown > 0 then claimUntil = os.clock() + 4 end -- continua com a física delas durante o voo
-			if thrown < total then
-				notice("Parte fora da sua física: não joguei. Tente de novo.")
-			end
-		end)
-	end
-
-	-- ===== linha da trajetória (mira) =====
-	local function destroyAim()
-		if aimFolder then aimFolder:Destroy() end
-		aimFolder, aimSegs, aimEnd = nil, nil, nil
-	end
-
-	local function createAim()
-		destroyAim()
-		aimFolder = Instance.new("Folder")
-		aimFolder.Name = "TelecineseMira"
-		aimFolder.Parent = workspace
-		aimSegs = {}
-		local function newPart(shape, size)
-			local p = Instance.new("Part")
-			p.Anchored = true
-			p.CanCollide = false
-			p.CanQuery = false
-			p.CanTouch = false
-			p.CastShadow = false
-			p.Material = Enum.Material.Neon
-			p.Color = Color3.fromRGB(80, 210, 255)
-			p.Shape = shape
-			p.Size = size
-			p.Transparency = 1
-			p.Parent = aimFolder
-			return p
-		end
-		for i = 1, AIM_POINTS do
-			aimSegs[i] = newPart(Enum.PartType.Block, Vector3.new(0.18, 0.18, 1))
-		end
-		aimEnd = newPart(Enum.PartType.Ball, Vector3.new(0.9, 0.9, 0.9))
-	end
-
-	local function updateAim()
-		if not aimOn or not aimFolder then return end
-		local hrp = getRoot()
-		local cam = workspace.CurrentCamera
-		if not hrp or not cam then return end
-
-		-- começa onde a parte está (ou onde ela ficaria ao ser pega)
-		local start
-		if #helds > 0 then
-			local sum = Vector3.zero
-			for _, h in ipairs(helds) do sum += h.part.Position end
-			start = sum / #helds
-		else
-			local up, back = holdOffsets(selected)
-			start = holdPoint(hrp, up, back, 0)
-		end
-
-		local v0 = aimDirection() * power
-		local g = Vector3.new(0, -workspace.Gravity, 0)
-
-		local params = RaycastParams.new()
-		params.FilterType = Enum.RaycastFilterType.Exclude
-		local ignore = {}
-		if player.Character then table.insert(ignore, player.Character) end
-		for _, h in ipairs(helds) do
-			for q in pairs(h.saved) do table.insert(ignore, q) end
-		end
-		if floatPart then table.insert(ignore, floatPart) end
-		params.FilterDescendantsInstances = ignore
-
-		local prev = start
-		local used = 0
-		for i = 1, AIM_POINTS do
-			local t = i * AIM_TIME_STEP
-			local pt = start + v0 * t + 0.5 * g * t * t
-			local seg = aimSegs[i]
-			used = i
-
-			local delta = pt - prev
-			local finish = pt
-			local stop = false
-			if delta.Magnitude > 0.01 then
-				local hit = workspace:Raycast(prev, delta, params)
-				if hit then
-					finish = hit.Position
-					stop = true
-				end
-			end
-
-			local l = (finish - prev).Magnitude
-			if l > 0.01 then
-				seg.Size = Vector3.new(0.18, 0.18, l)
-				seg.CFrame = CFrame.lookAt((prev + finish) / 2, finish)
-				seg.Transparency = 0.15
-			else
-				seg.Transparency = 1
-			end
-			prev = finish
-			if stop then break end
-		end
-		for i = used + 1, AIM_POINTS do aimSegs[i].Transparency = 1 end
-
-		aimEnd.CFrame = CFrame.new(prev)
-		aimEnd.Transparency = 0.1
-	end
-
-	-- ===== a cada frame =====
-	local function step()
-		if selected then
-			if not selected.Parent then
-				clearSelection()
-			elseif highlight then
-				highlight.OutlineColor = isAnchored(selected) and RED or BLUE
-			end
-		end
-
-		if #helds > 0 then
-			claimPhysics()
-			local hrp = getRoot()
-			local now = os.clock()
-			for i = #helds, 1, -1 do
-				local h = helds[i]
-				local part = h.part
-				if not part.Parent then
-					removeHold(h)
-				else
-					-- se algo removeu os controles da parte, recria
-					if h.att.Parent ~= part or h.ap.Parent ~= part or h.ao.Parent ~= part then
-						buildHold(h)
-					end
-					if hrp then
-						-- fica na frente/atrás e bem acima de mim, acompanhando meus movimentos e minha rotação
-						local target = holdPoint(hrp, h.up, h.back, h.side)
-						h.ap.Position = target
-						h.ap.MaxVelocity = math.clamp((part.Position - target).Magnitude * 6, 250, PULL_SPEED_MAX)
-						h.ao.CFrame = hrp.CFrame.Rotation * h.rel
-
-						-- a parte está respondendo? (usado quando o executor não sabe dizer quem simula a parte)
-						local dist = (part.Position - target).Magnitude
-						h.responding = dist < 12 or (h.lastDist ~= nil and h.lastDist - dist > 0.5)
-						h.lastDist = dist
-					end
-
-					-- vigia o tempo todo: a parte continua sob a minha física?
-					if heldMine(h) then
-						h.lostSince = nil
-						h.attempts = 0
-						h.gaveUp = nil
-					else
-						h.lostSince = h.lostSince or now
-					end
-				end
-			end
-			reclaimLost() -- se alguma perdeu a minha física, tenta recuperar
-		elseif os.clock() < claimUntil then
-			claimPhysics()
-		end
-	end
-
-	-- ===== seleção por toque =====
-	local function onBegan(input, processed)
-		if not isPress(input) then return end
-		if input.UserInputType == Enum.UserInputType.MouseButton1 and processed then return end
-		local pos = Vector2.new(input.Position.X, input.Position.Y)
-		if overMenu(pos) then return end
-		pointer = pos
-		press = { pos = pos, input = input }
-	end
-
-	local function onChanged(input)
-		if input.UserInputType == Enum.UserInputType.MouseMovement then
-			pointer = Vector2.new(input.Position.X, input.Position.Y)
-		elseif input.UserInputType == Enum.UserInputType.Touch then
-			if press and press.input == input then
-				pointer = Vector2.new(input.Position.X, input.Position.Y)
-			end
-		end
-	end
-
-	local function onEnded(input)
-		if not isPress(input) then return end
-		if input.UserInputType == Enum.UserInputType.Touch then
-			if press and press.input ~= input then return end -- outro dedo
-		end
-		local p = press
-		press = nil
-		if not p then return end
-		if (pointer - p.pos).Magnitude > TAP_TOLERANCE then return end -- arrastou (mexeu a câmera)
-		if grabbing or #helds > 0 then return end -- pegando/segurando: a seleção fica travada até jogar
-
-		local part = pick(p.pos)
-		if part then
-			if selected == part then clearSelection() else selectPart(part) end
-		else
-			clearSelection()
-		end
-	end
-
-	-- enquanto a telecinese está ligada, não deixa o personagem sentar em assentos (carros, bancos...)
-	local function guardSeat()
-		local char = player.Character
-		local hum = char and char:FindFirstChildOfClass("Humanoid")
-		if not hum then return end
-		if seatSaved[hum] == nil then
-			seatSaved[hum] = hum:GetStateEnabled(Enum.HumanoidStateType.Seated)
-			hum:SetStateEnabled(Enum.HumanoidStateType.Seated, false)
-		end
-		if hum.Sit or hum.SeatPart then
-			local seat = hum.SeatPart
-			local weld = seat and seat:FindFirstChild("SeatWeld")
-			if weld then weld:Destroy() end
-			hum.Sit = false
-			hum.Jump = true -- levanta do assento
-		end
-	end
-
-	local function restoreSeat()
-		for hum, enabled in pairs(seatSaved) do
-			if hum.Parent then
-				pcall(function() hum:SetStateEnabled(Enum.HumanoidStateType.Seated, enabled) end)
-			end
-			seatSaved[hum] = nil
-		end
-	end
-
-	local function disconnectAll()
-		for _, c in ipairs(connList) do c:Disconnect() end
-		table.clear(connList)
-	end
-
-	local function connectAll()
-		table.insert(connList, UIS.InputBegan:Connect(onBegan))
-		table.insert(connList, UIS.InputChanged:Connect(onChanged))
-		table.insert(connList, UIS.InputEnded:Connect(onEnded))
-		table.insert(connList, RunService.Heartbeat:Connect(step))
-		table.insert(connList, RunService.RenderStepped:Connect(updateAim))
-		table.insert(connList, RunService.Heartbeat:Connect(guardSeat))
-	end
-
-	-- limpar: solta a parte, tira a seleção, apaga qualquer controle que tenha sobrado e reinicia as conexões
-	local function resetAll()
-		grabToken += 1 -- cancela um "pegar" em andamento
-		releaseHeld()
-		clearSelection()
-		for _, inst in ipairs(created) do
-			if inst.Parent then inst:Destroy() end
-		end
-		table.clear(created)
-		claimUntil = 0
-		press = nil
-		pointer = Vector2.zero
-		if aimOn then createAim() end
-		disconnectAll()
-		connectAll()
-		claimPhysics()
-		notice("Tudo limpo. Selecione uma parte.", CLEAN_GREEN)
-	end
-
-	-- ===== mini menu =====
-	menu = Instance.new("Frame")
-	menu.Size = UDim2.fromOffset(MINI_W, MINI_H)
-	menu.Position = UDim2.fromOffset(PANEL_W + 6, BUBBLE_H + 8)
-	menu.Active = true
-	menu.Visible = false
-	menu.Parent = bubble
-	Instance.new("UICorner", menu).CornerRadius = UDim.new(0, 14)
-	addGradient(menu)
-
-	local labels = {}
-	local function miniLabel(y, h)
-		local l = Instance.new("TextLabel")
-		l.Size = UDim2.new(1, -16, 0, h)
-		l.Position = UDim2.fromOffset(8, y)
-		l.BackgroundTransparency = 1
-		l.Font = T.font
-		l.TextSize = 13
-		l.TextWrapped = true
-		l.TextTruncate = Enum.TextTruncate.AtEnd
-		l.TextColor3 = T.text
-		l.TextXAlignment = Enum.TextXAlignment.Left
-		l.TextYAlignment = Enum.TextYAlignment.Top
-		l.Text = ""
-		l.Parent = menu
-		table.insert(labels, l)
-		return l
-	end
-
-	status = miniLabel(4, 36)
-	info = miniLabel(244, 30)
-
-	local function fullButton(text, y)
-		return new3DButton(menu, text, UDim2.fromOffset(8, y), UDim2.new(1, -16, 0, ROW_H), T.faceOff, T.baseOff)
-	end
-	local halfW = (MINI_W - 16 - 8) / 2
-	local function halfButton(text, col, y)
-		return new3DButton(menu, text, UDim2.fromOffset(8 + (col - 1) * (halfW + 8), y),
-			UDim2.fromOffset(halfW, ROW_H), T.faceOff, T.baseOff)
-	end
-
-	local grabBtn = fullButton("pegar", 42)
-	grabBtn.face.Activated:Connect(grabSelected)
-
-	local manyBtn = fullButton("puxar vários", 82)
-	manyBtn.face.TextTruncate = Enum.TextTruncate.AtEnd
-	manyBtn.face.Activated:Connect(grabMany)
-
-	aimBtn = fullButton("mira", 122)
-	aimBtn.face.Activated:Connect(function()
-		aimOn = not aimOn
-		aimBtn.setOn(aimOn)
-		if aimOn then createAim() else destroyAim() end
-	end)
-
-	-- up/down: um toque ajusta um passo; segurando, repete
-	local function bindHold(button, fn)
-		local down = false
-		button.InputBegan:Connect(function(input)
-			if not isPress(input) then return end
-			down = true
-			fn()
-			task.spawn(function()
-				task.wait(0.35)
-				while down and button.Parent do
-					fn()
-					task.wait(0.07)
-				end
-			end)
-		end)
-		local function stop(input)
-			if isPress(input) then down = false end
-		end
-		button.InputEnded:Connect(stop)
-		UIS.InputEnded:Connect(stop)
-	end
-
-	local upBtn = halfButton("up", 1, 162)
-	bindHold(upBtn.face, function()
-		aimPitch = math.min(AIM_LIMIT_DEG, aimPitch + AIM_STEP_DEG)
-	end)
-	local downBtn = halfButton("down", 2, 162)
-	bindHold(downBtn.face, function()
-		aimPitch = math.max(-AIM_LIMIT_DEG, aimPitch - AIM_STEP_DEG)
-	end)
-
-	local throwBtn = halfButton("jogar", 1, 202)
-	throwBtn.face.Activated:Connect(throwPart)
-
-	local cleanBtn = halfButton("limpar", 2, 202)
-	cleanBtn.face.Activated:Connect(resetAll)
-
-	local function statusText()
-		if grabbing then return tripText end
-		if #helds == 1 then return "Segurando: " .. helds[1].part.Name .. ". Mire e jogue." end
-		if #helds > 1 then return "Segurando " .. #helds .. " partes. Mire e jogue." end
-		if selected then
-			if isAnchored(selected) then return "Parte ancorada: não dá para pegar." end
-			return "Selecionada: " .. selected.Name .. ". Toque em pegar."
-		end
-		return "Toque numa parte para selecionar."
-	end
-
-	-- posição: ao lado do menu principal (o lado livre, se a lista de jogadores estiver aberta);
-	-- com o menu principal fechado, fica logo abaixo do botão
-	local function placeMenu()
-		local x = 0
-		if panel.Visible then
-			local screenW = gui.AbsoluteSize.X
-			local bx = bubble.AbsolutePosition.X
-			local rightFits = bx + PANEL_W + 6 + MINI_W <= screenW
-			local leftFits = bx - MINI_W - 6 >= 0
-			local listOnRight = list.Visible and list.Position.X.Offset > 0
-			if rightFits and not listOnRight then
-				x = PANEL_W + 6
-			elseif leftFits then
-				x = -MINI_W - 6
-			else
-				x = PANEL_W + 6
-			end
-		end
-		menu.Position = UDim2.fromOffset(x, BUBBLE_H + 8)
-	end
-
-	local lastStatus
-	RunService.Heartbeat:Connect(function()
-		if not menu.Visible then return end
-		placeMenu()
-		if os.clock() >= noticeUntil then
-			local s = statusText()
-			if noticeActive or s ~= lastStatus then
-				noticeActive = false
-				lastStatus = s
-				status.Text = s
-				status.TextColor3 = T.text
-			end
-		end
-		info.Text = string.format("Power: %.4f\nMira: %+d graus", power, math.floor(aimPitch + 0.5))
-	end)
-
-	-- ===== botão "telecinese" no menu principal =====
-	local function setTele(enable)
-		if enable == on then return end
-		on = enable
-		menu.Visible = enable
-		if enable then
-			for _, l in ipairs(labels) do
-				l.Font = T.font
-				if l ~= status then l.TextColor3 = T.text end
-			end
-			lastStatus = nil
-			connectAll()
-		else
-			disconnectAll()
-			restoreSeat()
-			grabToken += 1
-			releaseHeld()
-			clearSelection()
-			press = nil
-			aimOn = false
-			aimBtn.setOn(false)
-			destroyAim()
-		end
-	end
-
-	partsBtn.face.Text = "telecinese"
-	partsBtn.face.Activated:Connect(function()
-		setTele(not on)
-		partsBtn.setOn(on)
-	end)
-end
-
-buildTelecinese()
+	gui:Destroy()
+end)
 
 -- ===== ABRIR / FECHAR O PAINEL (com animação) =====
 local panelOpen = false
