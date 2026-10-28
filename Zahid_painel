@@ -7,14 +7,73 @@ local HttpService = game:GetService("HttpService")
 local Lighting = game:GetService("Lighting")
 local player = Players.LocalPlayer
 
--- já existe um menu aberto? então não abre outro (para reabrir, use o botão "fechar" do menu que está aberto)
+-- já existe um painel aberto? mostra um aviso, destaca o botão dele com uma animação e não abre outro
 do
 	local pg = player:WaitForChild("PlayerGui")
-	if pg:FindFirstChild("MiniMenu") then return end
-end
+	local old = pg:FindFirstChild("ZahidPainel") or pg:FindFirstChild("MiniMenu")
+	if old then
+		task.spawn(function()
+			pcall(function()
+				-- aviso no topo da tela
+				local toastGui = Instance.new("ScreenGui")
+				toastGui.Name = "ZahidAviso"
+				toastGui.ResetOnSpawn = false
+				toastGui.IgnoreGuiInset = true
+				toastGui.DisplayOrder = 999
+				toastGui.Parent = pg
+				local f = Instance.new("Frame")
+				f.AnchorPoint = Vector2.new(0.5, 0)
+				f.Position = UDim2.new(0.5, 0, 0, -60)
+				f.Size = UDim2.fromOffset(270, 42)
+				f.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
+				f.Parent = toastGui
+				Instance.new("UICorner", f).CornerRadius = UDim.new(0, 12)
+				local st = Instance.new("UIStroke", f)
+				st.Color = Color3.fromRGB(220, 220, 230)
+				st.Thickness = 1.5
+				local tx = Instance.new("TextLabel")
+				tx.BackgroundTransparency = 1
+				tx.Size = UDim2.fromScale(1, 1)
+				tx.Font = Enum.Font.GothamMedium
+				tx.TextSize = 15
+				tx.TextColor3 = Color3.fromRGB(235, 235, 240)
+				tx.Text = "O menu já está aberto"
+				tx.Parent = f
+				TweenService:Create(f, TweenInfo.new(0.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+					{ Position = UDim2.new(0.5, 0, 0, 18) }):Play()
 
-local conns = {}
-local flyState = {}
+				-- destaca o botão do menu que já está rodando
+				local b = old:FindFirstChild("Bubble") or old:FindFirstChildWhichIsA("TextButton")
+				if b then
+					local sc = b:FindFirstChildOfClass("UIScale") or Instance.new("UIScale", b)
+					local glow = Instance.new("UIStroke")
+					glow.Color = Color3.fromRGB(255, 255, 255)
+					glow.Thickness = 0
+					glow.Parent = b
+					for _ = 1, 3 do
+						TweenService:Create(sc, TweenInfo.new(0.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1.3 }):Play()
+						TweenService:Create(glow, TweenInfo.new(0.2), { Thickness = 5 }):Play()
+						task.wait(0.26)
+						TweenService:Create(sc, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+						TweenService:Create(glow, TweenInfo.new(0.3), { Thickness = 0 }):Play()
+						task.wait(0.34)
+					end
+					glow:Destroy()
+				else
+					task.wait(1.5)
+				end
+
+				-- o aviso some
+				local out = TweenService:Create(f, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+					{ Position = UDim2.new(0.5, 0, 0, -60) })
+				out:Play()
+				out.Completed:Wait()
+				toastGui:Destroy()
+			end)
+		end)
+		return
+	end
+end
 
 -- ===== ANTIFLING =====
 local antiFlingSaved = {} -- [part] = CanCollide original
@@ -550,8 +609,8 @@ end
 local GuiService = game:GetService("GuiService")
 
 local FARM_FILE = "ZahidPainel_farm.json" -- onde a posição e o estado ficam salvos
-local SCRIPT_FILE = "Zahid_painel.lua"    -- nome deste script na pasta workspace do executor
-local SCRIPT_URL = "https://raw.githubusercontent.com/7PJBX/Zahid_painel/refs/heads/main/Zahid_painel" -- link (raw) do script
+local SCRIPT_FILE = "Zahid_painel_new.lua"    -- nome deste script na pasta workspace do executor
+local SCRIPT_URL = "https://raw.githubusercontent.com/7PJBX/Zahid_painel/refs/heads/main/Zahid_painel_new" -- link (raw) do script
 local USE_QUEUE = true                    -- false se o script já roda sozinho pela pasta autoexec
 local TELEPORT_JUMP = 15                  -- deslocamento em 1 frame (studs) que conta como teleporte
 local USE_INTERVAL = 5                    -- segundos entre cada uso da ferramenta
@@ -937,1356 +996,1750 @@ do
 	end
 end
 
--- ===== LISTA DE BOTÕES =====
-local options = {
-	{ name = "AntiFling", fn = antiFling },
-	{ name = "Anti Part Fling", fn = antiPartFling },
-	{ name = "TPTool",    fn = tpTool },
-	{ name = "VFly",      fn = vfly },
-	{ name = "Fly",       fn = fly },
-	{ name = "Float",     fn = floatToggle },
-}
 
--- ===== QUAL VERSÃO RODA: DARK PARA TODOS, ROMÂNTICA SÓ PARA OS USUÁRIOS DA LISTA =====
--- (nomes de usuário em minúsculas, não o display name)
-local ROMANTIC_USERS = {
-	["7000pjbxy8sqf"] = true,
-	["yazzy_wm"] = true,
-}
-local IS_ROMANTIC = ROMANTIC_USERS[string.lower(player.Name)] == true
+-- =====================================================================
+-- ===== PAINEL 1.16 (interface nova) ==================================
+-- =====================================================================
+local MarketplaceService = game:GetService("MarketplaceService")
 
--- ===== FONTES =====
-local ROMANTIC_FONT = Enum.Font.Fondamento
-
--- escolhe a primeira fonte da lista que existir nesta versão do Roblox
-local function pickFont(names, fallback)
-	for _, name in ipairs(names) do
-		local ok, font = pcall(function()
-			return Enum.Font[name]
-		end)
-		if ok and font then return font end
-	end
-	return fallback
-end
-local EMO_FONT = pickFont({ "GrenzeGotisch", "Creepster", "PermanentMarker" }, Enum.Font.GothamBold)
-
--- ===== TEMAS (cores) =====
--- face = parte clara do botão (desce ao apertar); base = corpo escuro (fica parado)
-local THEMES = {
-	dark = {
-		font = Enum.Font.GothamMedium,
-		panelTop = Color3.fromRGB(12, 12, 15),
-		panelBottom = Color3.fromRGB(24, 24, 29),
-		scroll = Color3.fromRGB(90, 90, 100),
-		text = Color3.fromRGB(225, 225, 232),
-		textOn = Color3.fromRGB(22, 22, 26),
-		faceOff = Color3.fromRGB(52, 52, 60),
-		baseOff = Color3.fromRGB(26, 26, 31),
-		faceOn = Color3.fromRGB(205, 205, 212),   -- ativo: cinza claro
-		baseOn = Color3.fromRGB(120, 120, 130),   -- corpo do ativo: cinza mais escuro
-		faceTp = Color3.fromRGB(60, 76, 124),
-		baseTp = Color3.fromRGB(30, 38, 66),
-		faceHelp = Color3.fromRGB(76, 62, 116),
-		baseHelp = Color3.fromRGB(40, 32, 64),
-		faceNet = Color3.fromRGB(44, 100, 108),
-		baseNet = Color3.fromRGB(22, 50, 56),
-		bubbleBg = Color3.fromRGB(18, 18, 22),
-		bubbleBgOpen = Color3.fromRGB(44, 44, 52),
-	},
-	romantic = {
-		font = ROMANTIC_FONT,
-		panelTop = Color3.fromRGB(75, 15, 50),
-		panelBottom = Color3.fromRGB(125, 30, 75),
-		scroll = Color3.fromRGB(255, 150, 190),
-		text = Color3.fromRGB(255, 235, 242),
-		textOn = Color3.fromRGB(255, 255, 255),
-		faceOff = Color3.fromRGB(135, 42, 92),
-		baseOff = Color3.fromRGB(80, 20, 54),
-		faceOn = Color3.fromRGB(240, 80, 145),
-		baseOn = Color3.fromRGB(165, 40, 98),
-		faceTp = Color3.fromRGB(200, 58, 112),
-		baseTp = Color3.fromRGB(122, 28, 70),
-		faceHelp = Color3.fromRGB(172, 52, 132),
-		baseHelp = Color3.fromRGB(104, 28, 82),
-		faceNet = Color3.fromRGB(214, 72, 98),
-		baseNet = Color3.fromRGB(130, 34, 56),
+local VERSION = "1.16"
+local CHANGELOG = {
+	{
+		v = "1.16",
+		date = "27/10/2026",
+		added = {
+			"Painel novo com categorias: Comportamento, Jogadores, Server, Updates e Configurações",
+			"Botão do menu arrastável, preso à tela, com volta em mola ao soltar fora da borda",
+			"Aviso na tela quando o menu já está aberto (o botão pisca para você achar)",
+			"Espectar jogador (câmera vai até ele) + Parar de espectar",
+			"Frear: segura 1s e depois teleporta 2 studs abaixo do jogador (com o ajudar ligado)",
+			"Perfil completo do jogador com avatar 3D, acessórios, preços e valor da outfit",
+			"Browser de servidores do jogo atual (5 por página, filtros por jogadores e ping)",
+			"Aba Updates com histórico de versões",
+			"Aba Configurações: tema escuro/claro e sons (pop, click, gota)",
+			"Efeitos sonoros nos botões",
+		},
+		changed = {
+			"Todo o painel foi refeito e substitui o anterior",
+			"Float, subir e descer agora também ficam na aba Jogadores",
+		},
+		removed = {
+			"Tema romântico, intro do beijo, coração e qualquer animação de amor",
+		},
 	},
 }
-local T = IS_ROMANTIC and THEMES.romantic or THEMES.dark
 
-local gradients = {} -- guarda os degradês, para trocar as cores quando o coração vira preto
+local SETTINGS_FILE = "ZahidPainel_config.json"
+local PLAYTIME_FILE = "ZahidPainel_tempo.json"
+local settings = { theme = "dark", sound = "click", soundOn = true }
+local hasFS = (writefile and readfile and isfile) ~= nil
 
-local function addGradient(obj)
-	obj.BackgroundColor3 = Color3.new(1, 1, 1)
-	local g = Instance.new("UIGradient")
-	g.Color = ColorSequence.new(T.panelTop, T.panelBottom)
-	g.Rotation = 90
-	g.Parent = obj
-	table.insert(gradients, g)
-end
-
--- ===== ANIMAÇÃO: FUNÇÕES AUXILIARES =====
-local function tween(obj, time, props, style, dir)
-	local t = TweenService:Create(
-		obj,
-		TweenInfo.new(time, style or Enum.EasingStyle.Quad, dir or Enum.EasingDirection.Out),
-		props
-	)
-	t:Play()
-	return t
-end
-
-local function isPress(input)
-	return input.UserInputType == Enum.UserInputType.MouseButton1
-		or input.UserInputType == Enum.UserInputType.Touch
-end
-
--- ===== BOTÃO 3D =====
--- dois retângulos arredondados: o corpo (escuro) fica parado e a face (clara) desce por cima dele ao apertar
-local DEPTH = 4 -- espessura do corpo que aparece embaixo da face
-local pressedFaces = {}
-
--- ao soltar o dedo/mouse em qualquer lugar, todas as faces apertadas voltam para cima
-UIS.InputEnded:Connect(function(input)
-	if not isPress(input) then return end
-	for face in pairs(pressedFaces) do
-		pressedFaces[face] = nil
-		tween(face, 0.14, { Position = UDim2.fromOffset(0, 0) }, Enum.EasingStyle.Back)
-	end
-end)
-
-local themed3D = {} -- todos os botões 3D, para trocar o tema depois
-
--- descobre o "papel" da cor do botão (Off, Tp, Help, Net) no tema atual
-local function roleOf(faceColor)
-	for _, role in ipairs({ "Off", "Tp", "Help", "Net" }) do
-		if T["face" .. role] == faceColor then return role end
-	end
-	return "Off"
-end
-
-local function new3DButton(parent, text, position, size, faceColor, baseColor)
-	local holder = Instance.new("Frame")
-	holder.BackgroundTransparency = 1
-	holder.BorderSizePixel = 0
-	holder.Position = position
-	holder.Size = size
-	holder.Parent = parent
-
-	local faceH = size.Y.Offset - DEPTH
-
-	-- corpo (mais escuro, parado)
-	local base = Instance.new("Frame")
-	base.Size = UDim2.new(1, 0, 0, faceH)
-	base.Position = UDim2.fromOffset(0, DEPTH)
-	base.BackgroundColor3 = baseColor
-	base.BorderSizePixel = 0
-	base.Parent = holder
-	Instance.new("UICorner", base).CornerRadius = UDim.new(0, 10)
-
-	-- face (mais clara, é o botão de verdade)
-	local face = Instance.new("TextButton")
-	face.Size = UDim2.new(1, 0, 0, faceH)
-	face.Position = UDim2.fromOffset(0, 0)
-	face.BackgroundColor3 = faceColor
-	face.BorderSizePixel = 0
-	face.AutoButtonColor = false
-	face.Font = T.font
-	face.TextColor3 = T.text
-	face.TextSize = 16
-	face.Text = text
-	face.Parent = holder
-	Instance.new("UICorner", face).CornerRadius = UDim.new(0, 10)
-
-	face.InputBegan:Connect(function(input)
-		if isPress(input) then
-			pressedFaces[face] = true
-			tween(face, 0.06, { Position = UDim2.fromOffset(0, DEPTH) })
-		end
+local function loadJson(file)
+	if not hasFS then return nil end
+	local ok, data = pcall(function()
+		if not isfile(file) then return nil end
+		return HttpService:JSONDecode(readfile(file))
 	end)
-
-	local obj = { holder = holder, base = base, face = face, role = roleOf(faceColor), isOn = false }
-
-	-- limpa da lista os botões que já foram destruídos (itens antigos da lista de jogadores)
-	if #themed3D > 120 then
-		for n = #themed3D, 1, -1 do
-			if not themed3D[n].holder.Parent then table.remove(themed3D, n) end
-		end
-	end
-	table.insert(themed3D, obj)
-
-	-- liga/desliga: muda a cor da face e do corpo
-	function obj.setOn(on)
-		obj.isOn = on
-		tween(face, 0.2, {
-			BackgroundColor3 = on and T.faceOn or T["face" .. obj.role],
-			TextColor3 = on and T.textOn or T.text,
-		})
-		tween(base, 0.2, { BackgroundColor3 = on and T.baseOn or T["base" .. obj.role] })
-	end
-
-	-- aparece aos poucos (usado nos itens da lista de jogadores)
-	function obj.hide()
-		face.BackgroundTransparency = 1
-		base.BackgroundTransparency = 1
-		face.TextTransparency = 1
-	end
-
-	function obj.show()
-		tween(face, 0.25, { BackgroundTransparency = 0, TextTransparency = 0 })
-		tween(base, 0.25, { BackgroundTransparency = 0 })
-	end
-
-	return obj
+	if ok and type(data) == "table" then return data end
+	return nil
 end
 
--- ===== INTRO: BEIJO 💋 =====
-local function playIntro(onDone)
-	local introGui = Instance.new("ScreenGui")
-	introGui.Name = "KissIntro"
-	introGui.IgnoreGuiInset = true
-	introGui.ResetOnSpawn = false
-	introGui.DisplayOrder = 100
-	introGui.Parent = player:WaitForChild("PlayerGui")
+local function saveJson(file, data)
+	if not hasFS then return end
+	pcall(function() writefile(file, HttpService:JSONEncode(data)) end)
+end
 
-	local CENTER = UDim2.fromScale(0.5, 0.5)
-	local BIG = 3 -- tamanho final do beijo (multiplicador)
+local function esc(s)
+	s = tostring(s or "")
+	s = s:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")
+	return s
+end
 
-	local function newEmoji(emoji, size)
+-- API do Roblox (tenta direto e depois por proxy, que costuma passar quando o direto é bloqueado)
+local function apiJson(url)
+	local function try(u)
+		local body = httpGetBody(u)
+		if not body then return nil end
+		local ok, d = pcall(function() return HttpService:JSONDecode(body) end)
+		if ok and type(d) == "table" and not d.errors then return d end
+		return nil
+	end
+	local d = try(url)
+	if d then return d end
+	return try((url:gsub("roblox%.com", "roproxy.com")))
+end
+
+local function main()
+	local saved = loadJson(SETTINGS_FILE)
+	if saved then
+		for k, v in pairs(saved) do settings[k] = v end
+	end
+
+	-- ===== TEMAS =====
+	local THEMES = {
+		dark = {
+			font = Enum.Font.GothamMedium,
+			panelTop = Color3.fromRGB(12, 12, 15), panelBottom = Color3.fromRGB(24, 24, 29),
+			side = Color3.fromRGB(16, 16, 20), card = Color3.fromRGB(30, 30, 36),
+			scroll = Color3.fromRGB(90, 90, 100),
+			text = Color3.fromRGB(225, 225, 232), textOn = Color3.fromRGB(22, 22, 26),
+			muted = Color3.fromRGB(150, 150, 162),
+			faceOff = Color3.fromRGB(52, 52, 60), baseOff = Color3.fromRGB(26, 26, 31),
+			faceOn = Color3.fromRGB(205, 205, 212), baseOn = Color3.fromRGB(120, 120, 130),
+			faceTp = Color3.fromRGB(60, 76, 124), baseTp = Color3.fromRGB(30, 38, 66),
+			faceHelp = Color3.fromRGB(76, 62, 116), baseHelp = Color3.fromRGB(40, 32, 64),
+			faceNet = Color3.fromRGB(44, 100, 108), baseNet = Color3.fromRGB(22, 50, 56),
+			bubbleBg = Color3.fromRGB(18, 18, 22), bubbleBgOpen = Color3.fromRGB(44, 44, 52),
+			glow = Color3.fromRGB(255, 255, 255),
+		},
+		light = {
+			font = Enum.Font.GothamMedium,
+			panelTop = Color3.fromRGB(244, 244, 248), panelBottom = Color3.fromRGB(226, 226, 234),
+			side = Color3.fromRGB(232, 232, 240), card = Color3.fromRGB(250, 250, 253),
+			scroll = Color3.fromRGB(150, 150, 165),
+			text = Color3.fromRGB(30, 30, 38), textOn = Color3.fromRGB(250, 250, 252),
+			muted = Color3.fromRGB(100, 100, 115),
+			faceOff = Color3.fromRGB(255, 255, 255), baseOff = Color3.fromRGB(190, 190, 202),
+			faceOn = Color3.fromRGB(50, 50, 62), baseOn = Color3.fromRGB(20, 20, 28),
+			faceTp = Color3.fromRGB(176, 194, 240), baseTp = Color3.fromRGB(124, 144, 204),
+			faceHelp = Color3.fromRGB(204, 184, 242), baseHelp = Color3.fromRGB(152, 132, 204),
+			faceNet = Color3.fromRGB(152, 216, 222), baseNet = Color3.fromRGB(104, 160, 168),
+			bubbleBg = Color3.fromRGB(250, 250, 252), bubbleBgOpen = Color3.fromRGB(210, 210, 222),
+			glow = Color3.fromRGB(40, 40, 60),
+		},
+	}
+	local T = THEMES[settings.theme] or THEMES.dark
+
+	local themed = {} -- { instância, função que pinta }
+	local function reg(inst, fn)
+		fn()
+		if #themed > 500 then
+			for n = #themed, 1, -1 do
+				if themed[n][1].Parent == nil then table.remove(themed, n) end
+			end
+		end
+		table.insert(themed, { inst, fn })
+	end
+	local function applyTheme(name)
+		settings.theme = name
+		T = THEMES[name] or THEMES.dark
+		for i = #themed, 1, -1 do
+			local e = themed[i]
+			if e[1].Parent == nil then table.remove(themed, i) else pcall(e[2]) end
+		end
+		saveJson(SETTINGS_FILE, settings)
+	end
+
+	local function pickFont(names, fallback)
+		for _, name in ipairs(names) do
+			local ok, font = pcall(function() return Enum.Font[name] end)
+			if ok and font then return font end
+		end
+		return fallback
+	end
+	local BUBBLE_FONT = pickFont({ "GrenzeGotisch", "Creepster", "PermanentMarker" }, Enum.Font.GothamBold)
+
+	-- ===== AUXILIARES =====
+	local uiConns = {} -- conexões da interface (desligadas ao fechar)
+	local alive = true
+
+	local function tween(obj, time, props, style, dir)
+		local t = TweenService:Create(obj, TweenInfo.new(time, style or Enum.EasingStyle.Quad, dir or Enum.EasingDirection.Out), props)
+		t:Play()
+		return t
+	end
+	local function isPress(input)
+		return input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch
+	end
+
+	-- ===== TELA =====
+	local gui = Instance.new("ScreenGui")
+	gui.Name = "ZahidPainel"
+	gui.ResetOnSpawn = false
+	gui.IgnoreGuiInset = true
+	gui.DisplayOrder = 50
+	gui.Parent = player:WaitForChild("PlayerGui")
+
+	local popGui = Instance.new("ScreenGui") -- janelas (perfil) ficam por cima do painel
+	popGui.Name = "ZahidPopup"
+	popGui.ResetOnSpawn = false
+	popGui.IgnoreGuiInset = true
+	popGui.DisplayOrder = 60
+	popGui.Parent = player:WaitForChild("PlayerGui")
+
+	-- ===== SONS (pop, click, gota) =====
+	-- Usam sons que já vêm dentro do app do Roblox (não dependem de ID de áudio da biblioteca).
+	local SFX = {
+		pop = { src = "rbxasset://sounds/switch.wav", vol = 0.7, speed = 1.35 },
+		click = { src = "rbxasset://sounds/button.wav", vol = 0.8, speed = 1 },
+		gota = { src = "rbxasset://sounds/impact_water.mp3", vol = 0.55, speed = 1.9, cut = 0.3 },
+	}
+	local sfxObjs = {}
+	for name, cfg in pairs(SFX) do
+		local s = Instance.new("Sound")
+		s.Name = "sfx_" .. name
+		s.SoundId = cfg.src
+		s.Volume = cfg.vol
+		s.PlaybackSpeed = cfg.speed
+		s.Parent = gui
+		sfxObjs[name] = s
+	end
+	local function playSfx(kind)
+		if not settings.soundOn and not kind then return end
+		local name = kind or settings.sound
+		local s, cfg = sfxObjs[name], SFX[name]
+		if not s then return end
+		pcall(function()
+			s.TimePosition = 0
+			s:Play()
+			if cfg.cut then
+				task.delay(cfg.cut, function() pcall(function() s:Stop() end) end)
+			end
+		end)
+	end
+
+	-- ===== BOTÃO 3D =====
+	local DEPTH = 4
+	local pressedFaces = {}
+	table.insert(uiConns, UIS.InputEnded:Connect(function(input)
+		if not isPress(input) then return end
+		for face in pairs(pressedFaces) do
+			pressedFaces[face] = nil
+			tween(face, 0.14, { Position = UDim2.fromOffset(0, 0) }, Enum.EasingStyle.Back)
+		end
+	end))
+
+	-- role: "Off", "Tp", "Help", "Net"
+	local function new3DButton(parent, text, position, size, role)
+		role = role or "Off"
+		local holder = Instance.new("Frame")
+		holder.BackgroundTransparency = 1
+		holder.BorderSizePixel = 0
+		holder.Position = position
+		holder.Size = size
+		holder.Parent = parent
+
+		local faceH = size.Y.Offset - DEPTH
+
+		local base = Instance.new("Frame")
+		base.Size = UDim2.new(1, 0, 0, faceH)
+		base.Position = UDim2.fromOffset(0, DEPTH)
+		base.BorderSizePixel = 0
+		base.Parent = holder
+		Instance.new("UICorner", base).CornerRadius = UDim.new(0, 10)
+
+		local face = Instance.new("TextButton")
+		face.Size = UDim2.new(1, 0, 0, faceH)
+		face.BorderSizePixel = 0
+		face.AutoButtonColor = false
+		face.Font = T.font
+		face.TextSize = 14
+		face.TextTruncate = Enum.TextTruncate.AtEnd
+		face.Text = text
+		face.Parent = holder
+		Instance.new("UICorner", face).CornerRadius = UDim.new(0, 10)
+
+		local obj = { holder = holder, base = base, face = face, role = role, isOn = false }
+
+		reg(holder, function()
+			face.Font = T.font
+			face.BackgroundColor3 = obj.isOn and T.faceOn or T["face" .. obj.role]
+			face.TextColor3 = obj.isOn and T.textOn or T.text
+			base.BackgroundColor3 = obj.isOn and T.baseOn or T["base" .. obj.role]
+		end)
+
+		face.InputBegan:Connect(function(input)
+			if isPress(input) then
+				pressedFaces[face] = true
+				tween(face, 0.06, { Position = UDim2.fromOffset(0, DEPTH) })
+				playSfx()
+			end
+		end)
+
+		function obj.setOn(on)
+			obj.isOn = on
+			tween(face, 0.2, {
+				BackgroundColor3 = on and T.faceOn or T["face" .. obj.role],
+				TextColor3 = on and T.textOn or T.text,
+			})
+			tween(base, 0.2, { BackgroundColor3 = on and T.baseOn or T["base" .. obj.role] })
+		end
+		return obj
+	end
+
+	-- ===== BLOCOS DE PÁGINA =====
+	local function nextOrder(parent)
+		local n = (parent:GetAttribute("n") or 0) + 1
+		parent:SetAttribute("n", n)
+		return n
+	end
+
+	local function newPage(parent)
+		local sf = Instance.new("ScrollingFrame")
+		sf.Size = UDim2.fromScale(1, 1)
+		sf.BackgroundTransparency = 1
+		sf.BorderSizePixel = 0
+		sf.ScrollBarThickness = 4
+		sf.AutomaticCanvasSize = Enum.AutomaticSize.Y
+		sf.CanvasSize = UDim2.new()
+		sf.ScrollingDirection = Enum.ScrollingDirection.Y
+		sf.Visible = false
+		sf.Parent = parent
+		local l = Instance.new("UIListLayout", sf)
+		l.Padding = UDim.new(0, 6)
+		l.SortOrder = Enum.SortOrder.LayoutOrder
+		local p = Instance.new("UIPadding", sf)
+		p.PaddingTop, p.PaddingBottom = UDim.new(0, 6), UDim.new(0, 8)
+		p.PaddingLeft, p.PaddingRight = UDim.new(0, 8), UDim.new(0, 10)
+		reg(sf, function() sf.ScrollBarImageColor3 = T.scroll end)
+		return sf
+	end
+
+	local function btnIn(page, text, role, h)
+		local b = new3DButton(page, text, UDim2.new(), UDim2.new(1, 0, 0, h or 32), role)
+		b.holder.LayoutOrder = nextOrder(page)
+		return b
+	end
+
+	-- linha com 2 ou 3 botões lado a lado
+	local function rowIn(page, texts, roles)
+		local row = Instance.new("Frame")
+		row.BackgroundTransparency = 1
+		row.Size = UDim2.new(1, 0, 0, 32)
+		row.LayoutOrder = nextOrder(page)
+		row.Parent = page
+		local l = Instance.new("UIListLayout", row)
+		l.FillDirection = Enum.FillDirection.Horizontal
+		l.Padding = UDim.new(0, 6)
+		l.SortOrder = Enum.SortOrder.LayoutOrder
+		local n = #texts
+		local gap = 6 * (n - 1) / n
+		local out = {}
+		for i, t in ipairs(texts) do
+			local b = new3DButton(row, t, UDim2.new(), UDim2.new(1 / n, -gap, 0, 32), roles and roles[i] or "Off")
+			b.holder.LayoutOrder = i
+			out[i] = b
+		end
+		return out, row
+	end
+
+	local function labelIn(page, text, kind, size)
 		local l = Instance.new("TextLabel")
 		l.BackgroundTransparency = 1
-		l.Font = Enum.Font.GothamMedium -- fonte padrão para preservar os emojis
-		l.Text = emoji
-		l.TextSize = size
-		l.Size = UDim2.fromOffset(size + 20, size + 20)
-		l.AnchorPoint = Vector2.new(0.5, 0.5)
-		l.Position = CENTER
-		l.Parent = introGui
+		l.Size = UDim2.new(1, 0, 0, 0)
+		l.AutomaticSize = Enum.AutomaticSize.Y
+		l.TextWrapped = true
+		l.RichText = true
+		l.TextXAlignment = Enum.TextXAlignment.Left
+		l.TextYAlignment = Enum.TextYAlignment.Top
+		l.TextSize = size or 13
+		l.Text = text
+		l.LayoutOrder = nextOrder(page)
+		l.Parent = page
+		reg(l, function()
+			l.Font = T.font
+			l.TextColor3 = (kind == "muted") and T.muted or T.text
+		end)
 		return l
 	end
 
-	local kiss = newEmoji("💋", 90)
-	kiss.ZIndex = 2
-	local kissScale = Instance.new("UIScale")
-	kissScale.Scale = 0.02
-	kissScale.Parent = kiss
-
-	-- 1) cresce do minúsculo até ficar grande
-	tween(kissScale, 1.2, { Scale = BIG }, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut).Completed:Wait()
-
-	-- 2) treme, instável, como se fosse explodir
-	local t0 = os.clock()
-	local SHAKE_TIME = 0.9
-	while os.clock() - t0 < SHAKE_TIME do
-		local k = (os.clock() - t0) / SHAKE_TIME
-		local amp = 3 + k * 14
-		local function r() return (math.random() * 2 - 1) * amp end
-		kiss.Position = UDim2.new(0.5, r(), 0.5, r())
-		kiss.Rotation = r() * 0.8
-		kissScale.Scale = BIG + (math.random() * 2 - 1) * 0.12 * (k + 0.3)
-		RunService.RenderStepped:Wait()
-	end
-	kiss.Position = CENTER
-	kiss.Rotation = 0
-	kissScale.Scale = BIG
-
-	-- 3) deixa a marca de beijo (mesmo emoji, transparente)
-	local mark = kiss:Clone()
-	mark.ZIndex = 1
-	mark.Rotation = -10
-	mark.TextTransparency = 0.6
-	mark.Position = CENTER
-	mark:FindFirstChildOfClass("UIScale").Scale = BIG
-	mark.Parent = introGui
-
-	-- 4) explosão de corações COM FÍSICA (gravidade + quicam nas bordas da tela)
-	local EMOJIS = { "❤️", "💖", "💘", "💕", "💝", "🔥", "🌹" }
-	local HEART_COUNT = 110
-	local GRAVITY = 1500      -- px/s² (maior = cai mais rápido)
-	local BOUNCE_WALL = 0.7   -- 1 = quica sem perder força
-	local BOUNCE_FLOOR = 0.55
-	local TOTAL_TIME = 3    -- segundos até sumir tudo
-	local FADE_TIME = 0.6
-
-	local screen = introGui.AbsoluteSize
-	local hearts = {}
-	for _ = 1, HEART_COUNT do
-		local size = math.random(50, 60)
-		local label = newEmoji(EMOJIS[math.random(#EMOJIS)], size)
-		label.ZIndex = 3
-		local angle = math.random() * math.pi * 2
-		local speed = math.random(500, 1500)
-		table.insert(hearts, {
-			label = label,
-			r = size / 2,
-			x = screen.X / 2,
-			y = screen.Y / 2,
-			vx = math.cos(angle) * speed,
-			vy = math.sin(angle) * speed - 400, -- leve impulso para cima
-			rot = math.random(-30, 30),
-			vrot = math.random(-500, 500),
-		})
+	local function sectionIn(page, text)
+		local l = labelIn(page, text, "muted", 12)
+		l.Text = string.upper(text)
+		return l
 	end
 
-	local function stepHearts(dt)
-		local W, H = introGui.AbsoluteSize.X, introGui.AbsoluteSize.Y
-		local RESTITUTION = 0.6 -- quique entre corações (1 = sem perder força)
-
-		-- 1) movimento + paredes, teto e chão
-		for _, p in ipairs(hearts) do
-			p.vy += GRAVITY * dt
-			p.x += p.vx * dt
-			p.y += p.vy * dt
-			p.rot += p.vrot * dt
-
-			if p.x < p.r then
-				p.x = p.r
-				p.vx = -p.vx * BOUNCE_WALL
-				p.vrot = -p.vrot * 0.8
-			elseif p.x > W - p.r then
-				p.x = W - p.r
-				p.vx = -p.vx * BOUNCE_WALL
-				p.vrot = -p.vrot * 0.8
+	local function holdWire(btn, onDown, onUp)
+		btn.face.InputBegan:Connect(function(input)
+			if isPress(input) then
+				onDown()
+				btn.setOn(true)
 			end
-
-			if p.y < p.r then
-				p.y = p.r
-				p.vy = -p.vy * BOUNCE_WALL
+		end)
+		btn.face.InputEnded:Connect(function(input)
+			if isPress(input) then
+				onUp()
+				btn.setOn(false)
 			end
+		end)
+	end
 
-			if p.y > H - p.r then
-				p.y = H - p.r
-				p.vy = -p.vy * BOUNCE_FLOOR
-				if math.abs(p.vy) < 60 then p.vy = 0 end
-				local friction = 1 - math.min(1, 6 * dt)
-				p.vx *= friction
-				p.vrot *= friction
+	-- ===== BOTÃO QUE ABRE O MENU (arrastável, com mola) =====
+	local bubble = Instance.new("TextButton")
+	bubble.Name = "Bubble"
+	bubble.Position = UDim2.fromOffset(20, 200)
+	bubble.Size = UDim2.fromOffset(120, 34)
+	bubble.AutoButtonColor = false
+	bubble.TextScaled = true
+	bubble.Text = "Zahid painel"
+	bubble.Font = BUBBLE_FONT
+	bubble.Visible = false
+	bubble.Parent = gui
+	Instance.new("UICorner", bubble).CornerRadius = UDim.new(0, 10)
+	local bubbleLimit = Instance.new("UITextSizeConstraint")
+	bubbleLimit.MaxTextSize = 20
+	bubbleLimit.Parent = bubble
+	local bubbleScale = Instance.new("UIScale")
+	bubbleScale.Scale = 0.01
+	bubbleScale.Parent = bubble
+
+	local panelOpen = false
+	reg(bubble, function()
+		bubble.BackgroundColor3 = panelOpen and T.bubbleBgOpen or T.bubbleBg
+		bubble.TextColor3 = T.text
+	end)
+
+	-- ===== PAINEL =====
+	local panel = Instance.new("Frame")
+	panel.AnchorPoint = Vector2.new(0.5, 0.5)
+	panel.Position = UDim2.fromScale(0.5, 0.5)
+	panel.Active = true
+	panel.Visible = false
+	panel.Parent = gui
+	Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 14)
+	local panelGrad = Instance.new("UIGradient")
+	panelGrad.Rotation = 90
+	panelGrad.Parent = panel
+	panel.BackgroundColor3 = Color3.new(1, 1, 1)
+	reg(panel, function() panelGrad.Color = ColorSequence.new(T.panelTop, T.panelBottom) end)
+	local panelScale = Instance.new("UIScale")
+	panelScale.Parent = panel
+
+	local function sizePanel()
+		local s = gui.AbsoluteSize
+		panel.Size = UDim2.fromOffset(math.min(420, s.X - 20), math.min(300, s.Y - 20))
+	end
+	sizePanel()
+
+	-- barra de cima
+	local TOP_H = 34
+	local title = Instance.new("TextLabel")
+	title.BackgroundTransparency = 1
+	title.Position = UDim2.fromOffset(14, 0)
+	title.Size = UDim2.new(1, -60, 0, TOP_H)
+	title.TextXAlignment = Enum.TextXAlignment.Left
+	title.TextSize = 16
+	title.Text = "Zahid painel  v" .. VERSION
+	title.Parent = panel
+	reg(title, function() title.Font = BUBBLE_FONT; title.TextColor3 = T.text end)
+
+	local xBtn = new3DButton(panel, "X", UDim2.new(1, -44, 0, 4), UDim2.fromOffset(34, 28), "Off")
+
+	-- lateral (categorias) e conteúdo
+	local SIDE_W = 100
+	local side = Instance.new("Frame")
+	side.Position = UDim2.fromOffset(6, TOP_H)
+	side.Size = UDim2.new(0, SIDE_W, 1, -TOP_H - 6)
+	side.BorderSizePixel = 0
+	side.Parent = panel
+	Instance.new("UICorner", side).CornerRadius = UDim.new(0, 10)
+	reg(side, function() side.BackgroundColor3 = T.side end)
+	local sideLayout = Instance.new("UIListLayout", side)
+	sideLayout.Padding = UDim.new(0, 6)
+	sideLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	local sidePad = Instance.new("UIPadding", side)
+	sidePad.PaddingTop, sidePad.PaddingLeft, sidePad.PaddingRight = UDim.new(0, 8), UDim.new(0, 6), UDim.new(0, 6)
+
+	local contentArea = Instance.new("Frame")
+	contentArea.BackgroundTransparency = 1
+	contentArea.Position = UDim2.fromOffset(SIDE_W + 12, TOP_H)
+	contentArea.Size = UDim2.new(1, -(SIDE_W + 18), 1, -TOP_H - 6)
+	contentArea.ClipsDescendants = true
+	contentArea.Parent = panel
+
+	local pages = {
+		behavior = newPage(contentArea),
+		players = newPage(contentArea),
+		server = newPage(contentArea),
+		updates = newPage(contentArea),
+		config = newPage(contentArea),
+		picker = newPage(contentArea), -- lista para escolher jogador (não aparece na lateral)
+	}
+	local catButtons = {}
+	local currentPage = "behavior"
+	local function showPage(name)
+		currentPage = name
+		for key, pg in pairs(pages) do pg.Visible = (key == name) end
+		local highlight = (name == "picker") and "players" or name
+		for key, b in pairs(catButtons) do b.setOn(key == highlight) end
+	end
+
+	local CATS = {
+		{ "behavior", "Comportamento" },
+		{ "players", "Jogadores" },
+		{ "server", "Server" },
+		{ "updates", "Updates" },
+		{ "config", "Config." },
+	}
+	for i, c in ipairs(CATS) do
+		local b = new3DButton(side, c[2], UDim2.new(), UDim2.new(1, 0, 0, 32), "Off")
+		b.holder.LayoutOrder = i
+		b.face.TextSize = 13
+		catButtons[c[1]] = b
+		b.face.Activated:Connect(function() showPage(c[1]) end)
+	end
+
+	-- ===== ABRIR / FECHAR PAINEL =====
+	local function setPanel(open)
+		panelOpen = open
+		tween(bubble, 0.25, { BackgroundColor3 = open and T.bubbleBgOpen or T.bubbleBg })
+		if open then
+			sizePanel()
+			panel.Visible = true
+			panelScale.Scale = 0.6
+			tween(panelScale, 0.28, { Scale = 1 }, Enum.EasingStyle.Back)
+		else
+			local t = tween(panelScale, 0.15, { Scale = 0.6 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+			t.Completed:Connect(function()
+				if not panelOpen then panel.Visible = false end
+			end)
+		end
+	end
+	xBtn.face.Activated:Connect(function() setPanel(false) end)
+
+	-- ===== ARRASTAR O BOTÃO (preso à tela, com mola) =====
+	local dragging, moved, startPos, startInput = false, false, nil, nil
+	local bubbleTween = nil
+
+	local function bounds()
+		local s = gui.AbsoluteSize
+		local w, h = bubble.AbsoluteSize.X, bubble.AbsoluteSize.Y
+		return 0, math.max(0, s.X - w), 0, math.max(0, s.Y - h)
+	end
+	local function rubber(v, lo, hi)
+		-- fora da borda a resistência aumenta: o botão "estica", mas não sai
+		if v < lo then return lo - math.min((lo - v) * 0.35, 60) end
+		if v > hi then return hi + math.min((v - hi) * 0.35, 60) end
+		return v
+	end
+
+	bubble.InputBegan:Connect(function(input)
+		if isPress(input) then
+			if bubbleTween then bubbleTween:Cancel() bubbleTween = nil end
+			dragging, moved = true, false
+			startPos, startInput = bubble.Position, input.Position
+		end
+	end)
+	table.insert(uiConns, UIS.InputChanged:Connect(function(input)
+		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+			or input.UserInputType == Enum.UserInputType.Touch) then
+			local d = input.Position - startInput
+			if d.Magnitude > 6 then moved = true end
+			local minX, maxX, minY, maxY = bounds()
+			bubble.Position = UDim2.fromOffset(
+				rubber(startPos.X.Offset + d.X, minX, maxX),
+				rubber(startPos.Y.Offset + d.Y, minY, maxY))
+		end
+	end))
+	table.insert(uiConns, UIS.InputEnded:Connect(function(input)
+		if dragging and isPress(input) then
+			dragging = false
+			if not moved then
+				setPanel(not panelOpen)
+				return
+			end
+			-- soltou fora da borda: volta em mola
+			local minX, maxX, minY, maxY = bounds()
+			local cx = math.clamp(bubble.Position.X.Offset, minX, maxX)
+			local cy = math.clamp(bubble.Position.Y.Offset, minY, maxY)
+			if cx ~= bubble.Position.X.Offset or cy ~= bubble.Position.Y.Offset then
+				bubbleTween = tween(bubble, 0.7, { Position = UDim2.fromOffset(cx, cy) },
+					Enum.EasingStyle.Elastic, Enum.EasingDirection.Out)
 			end
 		end
+	end))
 
-		-- 2) colisão entre os corações
-		for i = 1, #hearts - 1 do
-			local a = hearts[i]
-			for j = i + 1, #hearts do
-				local b = hearts[j]
-				local dx, dy = b.x - a.x, b.y - a.y
-				local minDist = a.r + b.r
-				local distSq = dx * dx + dy * dy
-				if distSq < minDist * minDist and distSq > 0.0001 then
-					local dist = math.sqrt(distSq)
-					local nx, ny = dx / dist, dy / dist
+	-- ===== TEMPO NO JOGO (medido pelo painel; o Roblox não informa isso) =====
+	local playTime = loadJson(PLAYTIME_FILE) or {}
+	local function ptKey(uid) return tostring(game.PlaceId) .. ":" .. tostring(uid) end
+	task.spawn(function()
+		local lastSave = os.clock()
+		while alive do
+			task.wait(10)
+			if not alive then break end
+			for _, p in ipairs(Players:GetPlayers()) do
+				local k = ptKey(p.UserId)
+				local e = playTime[k]
+				if not e then
+					e = { first = os.time(), secs = 0 }
+					playTime[k] = e
+				end
+				e.secs = e.secs + 10
+			end
+			if os.clock() - lastSave > 60 then
+				lastSave = os.clock()
+				saveJson(PLAYTIME_FILE, playTime)
+			end
+		end
+	end)
+	local function fmtDur(secs)
+		local d = math.floor(secs / 86400)
+		local h = math.floor((secs % 86400) / 3600)
+		local m = math.floor((secs % 3600) / 60)
+		return string.format("%d d %d h %d min", d, h, m)
+	end
+	local function fmtDate(y, m, d) return string.format("%02d/%02d/%d", d, m, y) end
 
-					-- separa os dois
-					local overlap = (minDist - dist) / 2
-					a.x -= nx * overlap
-					a.y -= ny * overlap
-					b.x += nx * overlap
-					b.y += ny * overlap
+	-- ===== PERFIL COMPLETO (popup) =====
+	local profile = { conns = {}, frame = nil }
+	local function closeProfile()
+		for _, c in ipairs(profile.conns) do pcall(function() c:Disconnect() end) end
+		profile.conns = {}
+		if profile.frame then profile.frame:Destroy() profile.frame = nil end
+	end
 
-					-- troca de velocidade na direção do choque
-					local vn = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny
-					if vn < 0 then
-						local impulse = -(1 + RESTITUTION) * vn / 2
-						a.vx -= impulse * nx
-						a.vy -= impulse * ny
-						b.vx += impulse * nx
-						b.vy += impulse * ny
+	local function cornerCard(inst)
+		Instance.new("UICorner", inst).CornerRadius = UDim.new(0, 10)
+		reg(inst, function() inst.BackgroundColor3 = T.card end)
+	end
+
+	local function openProfile(userId, nameHint, dispHint)
+		closeProfile()
+		local s = popGui.AbsoluteSize
+		local pf = Instance.new("Frame")
+		pf.AnchorPoint = Vector2.new(0.5, 0.5)
+		pf.Position = UDim2.fromScale(0.5, 0.5)
+		pf.Size = UDim2.fromOffset(math.min(430, s.X - 16), math.min(340, s.Y - 14))
+		pf.Active = true
+		pf.BackgroundColor3 = Color3.new(1, 1, 1)
+		pf.Parent = popGui
+		Instance.new("UICorner", pf).CornerRadius = UDim.new(0, 14)
+		local g = Instance.new("UIGradient", pf)
+		g.Rotation = 90
+		reg(pf, function() g.Color = ColorSequence.new(T.panelTop, T.panelBottom) end)
+		local sc = Instance.new("UIScale", pf)
+		sc.Scale = 0.6
+		tween(sc, 0.28, { Scale = 1 }, Enum.EasingStyle.Back)
+		profile.frame = pf
+
+		local tl = Instance.new("TextLabel")
+		tl.BackgroundTransparency = 1
+		tl.Position = UDim2.fromOffset(14, 0)
+		tl.Size = UDim2.new(1, -60, 0, 34)
+		tl.TextXAlignment = Enum.TextXAlignment.Left
+		tl.TextSize = 16
+		tl.Text = "Perfil completo"
+		tl.Parent = pf
+		reg(tl, function() tl.Font = BUBBLE_FONT tl.TextColor3 = T.text end)
+
+		local closeB = new3DButton(pf, "X", UDim2.new(1, -44, 0, 4), UDim2.fromOffset(34, 28), "Off")
+		closeB.face.Activated:Connect(closeProfile)
+
+		local body = newPage(pf)
+		body.Position = UDim2.fromOffset(0, 34)
+		body.Size = UDim2.new(1, 0, 1, -38)
+		body.Visible = true
+
+		-- cabeçalho
+		local head = Instance.new("Frame")
+		head.Size = UDim2.new(1, 0, 0, 64)
+		head.LayoutOrder = nextOrder(body)
+		head.Parent = body
+		cornerCard(head)
+		local av = Instance.new("ImageLabel")
+		av.Size = UDim2.fromOffset(56, 56)
+		av.Position = UDim2.fromOffset(4, 4)
+		av.BackgroundTransparency = 1
+		av.Image = "rbxthumb://type=AvatarHeadshot&id=" .. userId .. "&w=150&h=150"
+		av.Parent = head
+		Instance.new("UICorner", av).CornerRadius = UDim.new(1, 0)
+		local headTxt = Instance.new("TextLabel")
+		headTxt.BackgroundTransparency = 1
+		headTxt.Position = UDim2.fromOffset(68, 4)
+		headTxt.Size = UDim2.new(1, -72, 1, -8)
+		headTxt.TextXAlignment = Enum.TextXAlignment.Left
+		headTxt.TextWrapped = true
+		headTxt.RichText = true
+		headTxt.TextSize = 14
+		headTxt.Parent = head
+		reg(headTxt, function() headTxt.Font = T.font headTxt.TextColor3 = T.text end)
+		local function setHead(disp, name, extra)
+			headTxt.Text = "<b>" .. esc(disp or "?") .. "</b>\n@" .. esc(name or "?") .. "  •  ID " .. userId
+				.. (extra and ("\n" .. extra) or "")
+		end
+		setHead(dispHint, nameHint)
+
+		-- avatar 3D
+		local vpHolder = Instance.new("Frame")
+		vpHolder.Size = UDim2.new(1, 0, 0, 170)
+		vpHolder.LayoutOrder = nextOrder(body)
+		vpHolder.ClipsDescendants = true
+		vpHolder.Parent = body
+		cornerCard(vpHolder)
+		local vp = Instance.new("ViewportFrame")
+		vp.Size = UDim2.fromScale(1, 1)
+		vp.BackgroundTransparency = 1
+		vp.Ambient = Color3.fromRGB(180, 180, 180)
+		vp.LightColor = Color3.fromRGB(255, 255, 255)
+		vp.Active = true
+		vp.Parent = vpHolder
+		local vpInfo = Instance.new("TextLabel")
+		vpInfo.BackgroundTransparency = 1
+		vpInfo.Size = UDim2.fromScale(1, 1)
+		vpInfo.TextSize = 13
+		vpInfo.Text = "Carregando avatar..."
+		vpInfo.Parent = vpHolder
+		reg(vpInfo, function() vpInfo.Font = T.font vpInfo.TextColor3 = T.muted end)
+
+		local view = { yaw = math.pi, pitch = 0.1, zoom = 1, panX = 0, panY = 0, pan = false,
+			center = Vector3.new(0, 3, 0), dist = 9, model = nil }
+		local cam = Instance.new("Camera")
+		cam.FieldOfView = 50
+		cam.Parent = vp
+		vp.CurrentCamera = cam
+		local function updateCam()
+			local rot = CFrame.Angles(0, view.yaw, 0) * CFrame.Angles(view.pitch, 0, 0)
+			local focus = view.center + rot:VectorToWorldSpace(Vector3.new(view.panX, view.panY, 0))
+			cam.CFrame = CFrame.new(focus) * rot * CFrame.new(0, 0, view.dist * view.zoom)
+		end
+		updateCam()
+
+		local ctrl = rowIn(body, { "+", "-", "Mover", "Reset" })
+		for _, b in ipairs(ctrl) do b.face.TextSize = 13 end
+		ctrl[1].face.Activated:Connect(function() view.zoom = math.clamp(view.zoom * 0.8, 0.3, 2.2) updateCam() end)
+		ctrl[2].face.Activated:Connect(function() view.zoom = math.clamp(view.zoom * 1.25, 0.3, 2.2) updateCam() end)
+		ctrl[3].face.Activated:Connect(function()
+			view.pan = not view.pan
+			ctrl[3].setOn(view.pan)
+		end)
+		ctrl[4].face.Activated:Connect(function()
+			view.yaw, view.pitch, view.zoom, view.panX, view.panY = math.pi, 0.1, 1, 0, 0
+			updateCam()
+		end)
+
+		-- arrastar gira (ou move, com "Mover" ligado); pinça e roda do mouse dão zoom
+		local function overVp(p)
+			local a, b = vp.AbsolutePosition, vp.AbsoluteSize
+			return p.X >= a.X and p.X <= a.X + b.X and p.Y >= a.Y and p.Y <= a.Y + b.Y
+		end
+		local dragIn, lastPos, pinchStart = false, nil, 1
+		vp.InputBegan:Connect(function(input)
+			if isPress(input) then
+				dragIn, lastPos = true, input.Position
+				body.ScrollingEnabled = false -- arrastar o avatar não rola a janela
+			end
+		end)
+		table.insert(profile.conns, UIS.InputChanged:Connect(function(input)
+			if dragIn and (input.UserInputType == Enum.UserInputType.MouseMovement
+				or input.UserInputType == Enum.UserInputType.Touch) then
+				local d = input.Position - lastPos
+				lastPos = input.Position
+				if view.pan then
+					view.panX = view.panX - d.X * 0.02 * view.zoom
+					view.panY = view.panY + d.Y * 0.02 * view.zoom
+				else
+					view.yaw = view.yaw - d.X * 0.012
+					view.pitch = math.clamp(view.pitch + d.Y * 0.006, -0.7, 0.7)
+				end
+				updateCam()
+			elseif input.UserInputType == Enum.UserInputType.MouseWheel and overVp(UIS:GetMouseLocation()) then
+				view.zoom = math.clamp(view.zoom * (1 - input.Position.Z * 0.1), 0.3, 2.2)
+				updateCam()
+			end
+		end))
+		table.insert(profile.conns, UIS.InputEnded:Connect(function(input)
+			if isPress(input) then
+				dragIn = false
+				body.ScrollingEnabled = true
+			end
+		end))
+		table.insert(profile.conns, UIS.TouchPinch:Connect(function(positions, scale, _, state)
+			if state == Enum.UserInputState.Begin then
+				pinchStart = view.zoom
+			elseif positions[1] and overVp(positions[1]) then
+				view.zoom = math.clamp(pinchStart / math.max(scale, 0.05), 0.3, 2.2)
+				updateCam()
+			end
+		end))
+
+		local targetP = Players:GetPlayerByUserId(userId)
+
+		task.spawn(function()
+			local model
+			local src = targetP and targetP.Character
+			if src then
+				pcall(function() src.Archivable = true end)
+				local ok, c = pcall(function() return src:Clone() end)
+				if ok and c then model = c end
+			end
+			if not model then
+				local ok, m = pcall(function() return Players:CreateHumanoidModelFromUserId(userId) end)
+				if ok and m then model = m end
+			end
+			if not pf.Parent then return end
+			if not model then
+				vpInfo.Visible = false
+				local img = Instance.new("ImageLabel")
+				img.BackgroundTransparency = 1
+				img.Size = UDim2.fromScale(1, 1)
+				img.ScaleType = Enum.ScaleType.Fit
+				img.Image = "rbxthumb://type=Avatar&id=" .. userId .. "&w=420&h=420"
+				img.Parent = vpHolder
+				return
+			end
+			for _, d in ipairs(model:GetDescendants()) do
+				if d:IsA("BaseScript") or d:IsA("Sound") or d:IsA("BillboardGui") then
+					d:Destroy()
+				elseif d:IsA("BasePart") then
+					d.Anchored = true
+				end
+			end
+			local hum = model:FindFirstChildOfClass("Humanoid")
+			if hum then hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None end
+			pcall(function() model:PivotTo(CFrame.new(0, 0, 0)) end)
+			model.Parent = vp
+			local okB, cf, size = pcall(function() return model:GetBoundingBox() end)
+			if okB then
+				view.center = cf.Position
+				view.dist = size.Y * 1.25 + 1.5
+			end
+			view.model = model
+			updateCam()
+			vpInfo.Visible = false
+		end)
+
+		-- acessórios / roupas
+		sectionIn(body, "Acessórios e roupas")
+		local totalLbl = labelIn(body, "Carregando itens...", "muted")
+		local itemsFrame = Instance.new("Frame")
+		itemsFrame.BackgroundTransparency = 1
+		itemsFrame.Size = UDim2.new(1, 0, 0, 0)
+		itemsFrame.AutomaticSize = Enum.AutomaticSize.Y
+		itemsFrame.LayoutOrder = nextOrder(body)
+		itemsFrame.Parent = body
+		local il = Instance.new("UIListLayout", itemsFrame)
+		il.Padding = UDim.new(0, 4)
+		il.SortOrder = Enum.SortOrder.LayoutOrder
+		local detailLbl = labelIn(body, "Toque em um item para ver os detalhes e destacá-lo no avatar.", "muted")
+
+		local origTrans = {}
+		local function norm(str) return (tostring(str):lower():gsub("[^%w]", "")) end
+		local function highlight(name)
+			for part, t in pairs(origTrans) do
+				if part.Parent then part.Transparency = t end
+			end
+			origTrans = {}
+			if not name then return true end
+			if not view.model then return false end
+			local key = norm(name)
+			local chosen = {}
+			for _, acc in ipairs(view.model:GetChildren()) do
+				if acc:IsA("Accessory") then
+					local an = norm(acc.Name)
+					if an ~= "" and (an == key or key:find(an, 1, true) or an:find(key, 1, true)) then
+						chosen[acc] = true
 					end
 				end
 			end
-		end
-
-		-- 3) mantém dentro da tela e atualiza a posição na tela
-		for _, p in ipairs(hearts) do
-			p.x = math.clamp(p.x, p.r, W - p.r)
-			p.y = math.clamp(p.y, p.r, H - p.r)
-			p.label.Position = UDim2.fromOffset(p.x, p.y)
-			p.label.Rotation = p.rot
-		end
-	end
-
-	-- 5) o beijo original volta a ficar minúsculo, "de onde veio"
-	tween(kissScale, 0.6, { Scale = 0.02 }, Enum.EasingStyle.Back, Enum.EasingDirection.In)
-		.Completed:Connect(function() kiss:Destroy() end)
-
-	-- 6) simula a física e, ao fim do tempo, some tudo
-	local startTime = os.clock()
-	local fading = false
-	while true do
-		local dt = math.min(RunService.Heartbeat:Wait(), 1 / 30)
-		local elapsed = os.clock() - startTime
-		stepHearts(dt)
-
-		if not fading and elapsed >= TOTAL_TIME - FADE_TIME then
-			fading = true
-			tween(mark, FADE_TIME, { TextTransparency = 1 })
-			for _, p in ipairs(hearts) do
-				tween(p.label, FADE_TIME, { TextTransparency = 1 })
+			if next(chosen) == nil then return false end
+			for _, d in ipairs(view.model:GetDescendants()) do
+				if d:IsA("BasePart") then
+					local inSel = false
+					for acc in pairs(chosen) do
+						if d:IsDescendantOf(acc) then inSel = true break end
+					end
+					if not inSel then
+						origTrans[d] = d.Transparency
+						d.Transparency = 0.85
+					end
+				end
 			end
+			return true
 		end
-		if elapsed >= TOTAL_TIME then break end
-	end
 
-	introGui:Destroy()
-	onDone()
-end
-
--- ===== INTERFACE =====
-local gui = Instance.new("ScreenGui")
-gui.Name = "MiniMenu"
-gui.ResetOnSpawn = false
-gui.Parent = player:WaitForChild("PlayerGui")
-
--- botão que abre o menu
-local bubble = Instance.new("TextButton")
-bubble.Position = UDim2.fromOffset(20, 200)
-bubble.AutoButtonColor = false
-bubble.TextScaled = true
-bubble.Parent = gui
-
-local BUBBLE_H
-if IS_ROMANTIC then
-	-- romântica: só um coração, sem fundo (aparece depois da intro)
-	BUBBLE_H = 48
-	bubble.Size = UDim2.fromOffset(48, 48)
-	bubble.Text = "❤️"
-	bubble.Font = Enum.Font.GothamMedium
-	bubble.BackgroundTransparency = 1
-	bubble.Visible = false
-else
-	-- dark: retângulo arredondado com o nome em fonte emo
-	BUBBLE_H = 34
-	bubble.Size = UDim2.fromOffset(120, 34)
-	bubble.Text = "Zahid painel"
-	bubble.Font = EMO_FONT
-	bubble.BackgroundColor3 = T.bubbleBg
-	bubble.TextColor3 = T.text
-	Instance.new("UICorner", bubble).CornerRadius = UDim.new(0, 10)
-	local bubbleLimit = Instance.new("UITextSizeConstraint")
-	bubbleLimit.MaxTextSize = 20
-	bubbleLimit.Parent = bubble
-end
-
-local bubbleScale = Instance.new("UIScale")
-bubbleScale.Scale = 0.01
-bubbleScale.Parent = bubble
-
-local PANEL_W = 176
-local PANEL_H = 240 -- altura visível do menu (o resto rola)
-local LIST_W = 170
-local LIST_Y = 0 -- altura da lista em relação ao painel (0 = alinhada ao topo)
-local LIST_H = PANEL_H
-
--- cada linha tem 32 de altura (28 da face + 4 do corpo) e 40 de espaçamento
-local ROW_H = 32
-local ROW_STEP = 40
-local function rowY(index)
-	return 2 + (index - 1) * ROW_STEP
-end
-local ROW_QE = #options + 1
-local ROW_RE = #options + 2
-local ROW_SELECT = #options + 3
-local ROW_TP = #options + 4
-local ROW_HELP = #options + 5
-local ROW_REJOIN = #options + 6
-local ROW_HOP = #options + 7
-local ROW_BACK = #options + 8
-local ROW_SETPOS = #options + 9
-local ROW_FARM = #options + 10
-local ROW_CLOSE = #options + 11
-local CONTENT_H = rowY(ROW_CLOSE) + ROW_H + 6 -- altura total do conteúdo rolável
-
-local panel = Instance.new("Frame")
-panel.Size = UDim2.fromOffset(PANEL_W, PANEL_H)
-panel.Position = UDim2.fromOffset(0, BUBBLE_H + 8)
-panel.Active = true
-panel.Visible = false
-panel.Parent = bubble
-Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 14)
-addGradient(panel)
-
-local panelScale = Instance.new("UIScale")
-panelScale.Parent = panel
-
--- área rolável do menu principal (todos os botões ficam aqui dentro)
-local content = Instance.new("ScrollingFrame")
-content.Size = UDim2.new(1, 0, 1, -12)
-content.Position = UDim2.fromOffset(0, 6)
-content.BackgroundTransparency = 1
-content.BorderSizePixel = 0
-content.ScrollBarThickness = 4
-content.ScrollBarImageColor3 = T.scroll
-content.ScrollingDirection = Enum.ScrollingDirection.Y
-content.CanvasSize = UDim2.fromOffset(0, CONTENT_H)
-content.Parent = panel
-
--- botões liga/desliga (só o nome; a cor mostra se está ligado)
-local toggles = {} -- toggles.Fly(true) liga/desliga pelo código e atualiza o botão
-for i, opt in ipairs(options) do
-	local state = false
-	local btn = new3DButton(content, opt.name, UDim2.fromOffset(8, rowY(i)),
-		UDim2.new(1, -16, 0, ROW_H), T.faceOff, T.baseOff)
-
-	local function setState(newState)
-		state = newState
-		opt.fn(state)
-		btn.setOn(state)
-	end
-
-	btn.face.Activated:Connect(function()
-		setState(not state)
-	end)
-	toggles[opt.name] = setState
-end
-
--- botões Q / E do Float (segure para descer / subir)
-local halfW = (PANEL_W - 16 - 8) / 2
-
-local function makeHoldButton(text, x, setter)
-	local btn = new3DButton(content, text, UDim2.fromOffset(x, rowY(ROW_QE)),
-		UDim2.fromOffset(halfW, ROW_H), T.faceOff, T.baseOff)
-	btn.face.TextScaled = true -- o texto se ajusta ao botão mais estreito
-	local limit = Instance.new("UITextSizeConstraint")
-	limit.MaxTextSize = 16
-	limit.Parent = btn.face
-
-	btn.face.InputBegan:Connect(function(input)
-		if isPress(input) then
-			setter(true)
-			btn.setOn(true)
+		local function priceText(a)
+			if a.price == nil then return "..." end
+			if a.forSale and type(a.price) == "number" then
+				return (a.price == 0 and "Grátis" or ("R$ " .. a.price)) .. (a.limited and " (limitado)" or "")
+			end
+			return "indisponível"
 		end
-	end)
-	btn.face.InputEnded:Connect(function(input)
-		if isPress(input) then
-			setter(false)
-			btn.setOn(false)
-		end
-	end)
-end
 
-makeHoldButton("descer", 8, function(v) floatDown = v end)
-makeHoldButton("subir", 8 + halfW + 8, function(v) floatUp = v end)
+		task.spawn(function()
+			local assets = {}
+			local d = apiJson("https://avatar.roblox.com/v1/users/" .. userId .. "/avatar")
+			if d and type(d.assets) == "table" then
+				for _, a in ipairs(d.assets) do
+					assets[#assets + 1] = { id = a.id, name = a.name or ("Item " .. a.id),
+						kind = a.assetType and a.assetType.name or "" }
+				end
+			elseif targetP and targetP.Character then
+				local hum = targetP.Character:FindFirstChildOfClass("Humanoid")
+				local ok, desc = pcall(function() return hum:GetAppliedDescription() end)
+				if ok and desc then
+					local okA, accs = pcall(function() return desc:GetAccessories(true) end)
+					if okA and accs then
+						for _, a in ipairs(accs) do
+							if a.AssetId and a.AssetId ~= 0 then
+								assets[#assets + 1] = { id = a.AssetId, name = "Item " .. a.AssetId,
+									kind = (tostring(a.AccessoryType):gsub("Enum.AccessoryType.", "")) }
+							end
+						end
+					end
+					for _, f in ipairs({ "Shirt", "Pants", "GraphicTShirt", "Face" }) do
+						local id = desc[f]
+						if type(id) == "number" and id ~= 0 then
+							assets[#assets + 1] = { id = id, name = f .. " " .. id, kind = f }
+						end
+					end
+				end
+			end
+			if not pf.Parent then return end
+			if #assets == 0 then
+				totalLbl.Text = "Não consegui ler os itens deste avatar."
+				return
+			end
 
--- RE: regenera o personagem e volta para o mesmo lugar
-local reBtn = new3DButton(content, "resetar", UDim2.fromOffset(8, rowY(ROW_RE)),
-	UDim2.new(1, -16, 0, ROW_H), T.faceOff, T.baseOff)
-reBtn.face.Activated:Connect(function()
-	reBtn.setOn(true)
-	respawnHere(function()
-		reBtn.setOn(false)
-	end)
-end)
+			local selected = nil
+			for i, a in ipairs(assets) do
+				local b = new3DButton(itemsFrame, a.name, UDim2.new(), UDim2.new(1, 0, 0, 28), "Off")
+				b.holder.LayoutOrder = i
+				b.face.TextSize = 12
+				b.face.TextXAlignment = Enum.TextXAlignment.Left
+				Instance.new("UIPadding", b.face).PaddingLeft = UDim.new(0, 8)
+				a.btn = b
+				b.face.Activated:Connect(function()
+					if selected and selected.btn then selected.btn.setOn(false) end
+					if selected == a then
+						selected = nil
+						highlight(nil)
+						detailLbl.Text = "Toque em um item para ver os detalhes e destacá-lo no avatar."
+						return
+					end
+					selected = a
+					b.setOn(true)
+					local found = highlight(a.name)
+					local creator = a.info and a.info.Creator and a.info.Creator.Name or "?"
+					detailLbl.Text = "<b>" .. esc(a.name) .. "</b>\nTipo: " .. esc(a.kind) .. "  •  Preço: " .. priceText(a)
+						.. "\nCriador: " .. esc(creator) .. "  •  ID: " .. a.id
+						.. (found and "" or "\n(não consegui destacar este item no modelo)")
+				end)
+			end
 
--- seletor de jogador
-local selectedPlayer = nil
-
-local selectBtn = new3DButton(content, "Selecionar jogador", UDim2.fromOffset(8, rowY(ROW_SELECT)),
-	UDim2.new(1, -16, 0, ROW_H), T.faceOff, T.baseOff)
-selectBtn.face.TextTruncate = Enum.TextTruncate.AtEnd
-
-local tpBtn = new3DButton(content, "TP até o jogador", UDim2.fromOffset(8, rowY(ROW_TP)),
-	UDim2.new(1, -16, 0, ROW_H), T.faceTp, T.baseTp)
-tpBtn.face.TextTruncate = Enum.TextTruncate.AtEnd
-
-local helpBtn = new3DButton(content, "ajudar", UDim2.fromOffset(8, rowY(ROW_HELP)),
-	UDim2.new(1, -16, 0, ROW_H), T.faceHelp, T.baseHelp)
-helpBtn.face.TextTruncate = Enum.TextTruncate.AtEnd
-
-local rejoinBtn = new3DButton(content, "Rejoin", UDim2.fromOffset(8, rowY(ROW_REJOIN)),
-	UDim2.new(1, -16, 0, ROW_H), T.faceNet, T.baseNet)
-
-local hopBtn = new3DButton(content, "Server hop", UDim2.fromOffset(8, rowY(ROW_HOP)),
-	UDim2.new(1, -16, 0, ROW_H), T.faceNet, T.baseNet)
-
-local backBtn = new3DButton(content, "voltar", UDim2.fromOffset(8, rowY(ROW_BACK)),
-	UDim2.new(1, -16, 0, ROW_H), T.faceNet, T.baseNet)
-
-local setPosBtn = new3DButton(content, "Definir posição", UDim2.fromOffset(8, rowY(ROW_SETPOS)),
-	UDim2.new(1, -16, 0, ROW_H), T.faceTp, T.baseTp)
-setPosBtn.face.TextTruncate = Enum.TextTruncate.AtEnd
-
-local farmBtn = new3DButton(content, "Auto farm", UDim2.fromOffset(8, rowY(ROW_FARM)),
-	UDim2.new(1, -16, 0, ROW_H), T.faceOff, T.baseOff)
-farmBtn.face.TextTruncate = Enum.TextTruncate.AtEnd
-
-local closeBtn = new3DButton(content, "fechar", UDim2.fromOffset(8, rowY(ROW_CLOSE)),
-	UDim2.new(1, -16, 0, ROW_H), T.faceOff, T.baseOff)
-
--- texto do botão de teleporte (muda para os usuários da lista, pelo nome de usuário)
-local function updateTpText()
-	local name = selectedPlayer and string.lower(selectedPlayer.Name)
-	if name and ROMANTIC_USERS[name] then
-		tpBtn.face.Text = "ir para mozão"
-	else
-		tpBtn.face.Text = "TP até o jogador"
-	end
-end
-
--- lista de jogadores (abre ao lado do painel)
-local list = Instance.new("ScrollingFrame")
-list.Size = UDim2.fromOffset(LIST_W, LIST_H)
-list.Position = UDim2.fromOffset(PANEL_W + 6, LIST_Y)
-list.BorderSizePixel = 0
-list.ScrollBarThickness = 4
-list.ScrollBarImageColor3 = T.scroll
-list.AutomaticCanvasSize = Enum.AutomaticSize.Y
-list.CanvasSize = UDim2.new()
-list.Active = true
-list.Visible = false
-list.Parent = panel
-Instance.new("UICorner", list).CornerRadius = UDim.new(0, 14)
-addGradient(list)
-local layout = Instance.new("UIListLayout", list)
-layout.Padding = UDim.new(0, 4)
-local pad = Instance.new("UIPadding", list)
-pad.PaddingTop, pad.PaddingBottom = UDim.new(0, 6), UDim.new(0, 6)
-pad.PaddingLeft, pad.PaddingRight = UDim.new(0, 6), UDim.new(0, 6)
-
-local listScale = Instance.new("UIScale")
-listScale.Parent = list
-
-local listOpen = false
-local setList -- declarada aqui porque os itens da lista usam ela
-
-local friendCache = {}    -- [userId] = true/false (é meu amigo?)
-local friendPending = {}
-local thumbCache = {}     -- [userId] = imagem do avatar
-local refreshList         -- definida logo abaixo
-local refreshQueued = false
-
--- reordena a lista aberta (com um pequeno atraso para juntar várias respostas de uma vez)
-local function refreshListSoon()
-	if refreshQueued then return end
-	refreshQueued = true
-	task.delay(0.4, function()
-		refreshQueued = false
-		if listOpen then refreshList() end
-	end)
-end
-
--- descobre, sem travar, se o jogador é meu amigo; quando a resposta chega, os amigos sobem para o topo
-local function queryFriend(p)
-	if friendCache[p.UserId] ~= nil or friendPending[p.UserId] then return end
-	friendPending[p.UserId] = true
-	task.spawn(function()
-		local ok, res = pcall(function() return player:IsFriendsWith(p.UserId) end)
-		friendPending[p.UserId] = nil
-		friendCache[p.UserId] = (ok and res == true)
-		refreshListSoon()
-	end)
-end
-
--- foto do avatar (rosto) ao lado do nome
-local function loadAvatar(p, img)
-	local cached = thumbCache[p.UserId]
-	if cached then
-		img.Image = cached
-		return
-	end
-	task.spawn(function()
-		local ok, content = pcall(function()
-			return Players:GetUserThumbnailAsync(p.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size48x48)
-		end)
-		if ok and content then
-			thumbCache[p.UserId] = content
-			if img.Parent then img.Image = content end
-		end
-	end)
-end
-
-function refreshList()
-	for _, c in ipairs(list:GetChildren()) do
-		if c:IsA("Frame") then c:Destroy() end
-	end
-
-	-- amigos primeiro, depois todos os outros; cada grupo em ordem alfabética
-	local entries, found = {}, false
-	for _, p in ipairs(Players:GetPlayers()) do
-		if p ~= player then
-			if p == selectedPlayer then found = true end
-			queryFriend(p)
-			table.insert(entries, {
-				p = p,
-				friend = friendCache[p.UserId] == true,
-				key = string.lower(p.DisplayName),
-				key2 = string.lower(p.Name),
-			})
-		end
-	end
-	table.sort(entries, function(a, b)
-		if a.friend ~= b.friend then return a.friend end
-		if a.key ~= b.key then return a.key < b.key end
-		return a.key2 < b.key2
-	end)
-
-	for n, e in ipairs(entries) do
-		local p = e.p
-		-- amigos usam outra cor (a mesma dos botões de rede: Rejoin / Server hop)
-		local item = new3DButton(list, p.DisplayName .. " (@" .. p.Name .. ")", UDim2.new(),
-			UDim2.new(1, 0, 0, ROW_H),
-			e.friend and T.faceNet or T.faceOff, e.friend and T.baseNet or T.baseOff)
-		item.face.TextSize = 13
-		item.face.TextTruncate = Enum.TextTruncate.AtEnd
-		item.face.TextXAlignment = Enum.TextXAlignment.Left
-		local fpad = Instance.new("UIPadding")
-		fpad.PaddingLeft = UDim.new(0, 34) -- espaço para a foto
-		fpad.PaddingRight = UDim.new(0, 4)
-		fpad.Parent = item.face
-
-		-- foto do avatar à esquerda do nome
-		local img = Instance.new("ImageLabel")
-		img.Size = UDim2.fromOffset(22, 22)
-		img.Position = UDim2.new(0, -28, 0.5, -11) -- o padding (34) empurra os filhos: compensa para a foto ficar a 6 px da borda
-		img.BackgroundColor3 = Color3.fromRGB(30, 30, 36)
-		img.BackgroundTransparency = 1
-		img.ImageTransparency = 1
-		img.BorderSizePixel = 0
-		img.Parent = item.face
-		Instance.new("UICorner", img).CornerRadius = UDim.new(1, 0)
-		loadAvatar(p, img)
-		item.hide()
-
-		-- cada item aparece com um pequeno atraso
-		task.delay((n - 1) * 0.04, function()
-			if item.holder.Parent then
-				item.show()
-				tween(img, 0.25, { ImageTransparency = 0, BackgroundTransparency = 0.4 })
+			local total, counted, unavailable = 0, 0, 0
+			for _, a in ipairs(assets) do
+				if not pf.Parent then return end
+				local ok, info = pcall(function() return MarketplaceService:GetProductInfo(a.id, Enum.InfoType.Asset) end)
+				if ok and type(info) == "table" then
+					a.info = info
+					a.name = info.Name or a.name
+					a.price = info.PriceInRobux or false
+					a.forSale = info.IsForSale == true
+					a.limited = info.IsLimited == true or info.IsLimitedUnique == true
+					if a.forSale and type(a.price) == "number" then
+						total += a.price
+						counted += 1
+					else
+						unavailable += 1
+					end
+				else
+					a.price = false
+					unavailable += 1
+				end
+				a.btn.face.Text = a.name .. "  •  " .. priceText(a)
+				totalLbl.Text = "<b>Valor da outfit: R$ " .. total .. "</b>  (" .. counted .. " com preço, "
+					.. unavailable .. " indisponíveis)"
+				task.wait(0.08)
 			end
 		end)
 
-		item.face.Activated:Connect(function()
-			selectedPlayer = p
-			selectBtn.face.Text = p.DisplayName
-			updateTpText()
-			setList(false)
-		end)
-	end
+		-- informações
+		sectionIn(body, "Informações")
+		local function kv(key)
+			local l = labelIn(body, "<b>" .. key .. ":</b> ...", nil, 13)
+			return function(v)
+				if l.Parent then l.Text = "<b>" .. key .. ":</b> " .. esc(v) end
+			end
+		end
+		local sCreated, sAge, sVerified = kv("Conta criada em"), kv("Idade da conta"), kv("Verificado")
+		local sMember, sFriends = kv("Associação"), kv("Amigos")
+		local sFollowers, sFollowing = kv("Seguidores"), kv("Seguindo")
+		local sGroups, sNames, sGames = kv("Grupos"), kv("Nomes anteriores"), kv("Jogos criados")
+		local sBio, sPlay, sServer = kv("Bio"), kv("Tempo neste jogo"), kv("Neste servidor")
 
-	if selectedPlayer and not found then
-		selectedPlayer = nil
-		selectBtn.face.Text = "Selecionar jogador"
-		updateTpText()
-	end
-end
-
-setList = function(open)
-	listOpen = open
-	if open then
-		refreshList()
-		-- abre à direita; se não couber na tela, abre à esquerda
-		local screenW = gui.AbsoluteSize.X
-		if bubble.AbsolutePosition.X + PANEL_W + 6 + LIST_W > screenW then
-			list.Position = UDim2.fromOffset(-LIST_W - 6, LIST_Y)
+		if targetP then
+			sServer("Sim")
+			sMember((tostring(targetP.MembershipType):gsub("Enum.MembershipType.", "")))
+			sAge(targetP.AccountAge .. " dias")
 		else
-			list.Position = UDim2.fromOffset(PANEL_W + 6, LIST_Y)
+			sServer("Não")
+			sMember("só visível para quem está no servidor")
 		end
-		list.Visible = true
-		listScale.Scale = 0.7
-		tween(listScale, 0.28, { Scale = 1 }, Enum.EasingStyle.Back)
-	else
-		local t = tween(listScale, 0.12, { Scale = 0.7 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
-		t.Completed:Connect(function()
-			if not listOpen then list.Visible = false end
+		local pt = playTime[ptKey(userId)]
+		if pt then
+			sPlay(fmtDur(pt.secs) .. " (medido pelo painel, desde " .. os.date("%d/%m/%Y", pt.first) .. ")")
+		else
+			sPlay("sem registro (o Roblox não informa; o painel só conta enquanto você está junto)")
+		end
+
+		task.spawn(function()
+			local u = apiJson("https://users.roblox.com/v1/users/" .. userId)
+			if not u then sCreated("indisponível") sBio("indisponível") return end
+			setHead(u.displayName or dispHint, u.name or nameHint,
+				(u.hasVerifiedBadge and "Verificado" or "") .. (u.isBanned and "  •  BANIDO" or ""))
+			sVerified(u.hasVerifiedBadge and "Sim" or "Não")
+			local y, m, d2 = tostring(u.created or ""):match("(%d+)-(%d+)-(%d+)")
+			if y then
+				sCreated(fmtDate(tonumber(y), tonumber(m), tonumber(d2)))
+				local ts = os.time({ year = tonumber(y), month = tonumber(m), day = tonumber(d2), hour = 12 })
+				sAge(math.floor((os.time() - ts) / 86400) .. " dias")
+			end
+			local bio = tostring(u.description or "")
+			sBio(bio ~= "" and bio or "(vazia)")
 		end)
-	end
-end
-
-selectBtn.face.Activated:Connect(function()
-	setList(not listOpen)
-end)
-
--- a lista atualiza sozinha quando alguém entra ou sai do servidor
-Players.PlayerAdded:Connect(function(p)
-	queryFriend(p)
-	refreshList()
-end)
-for _, p in ipairs(Players:GetPlayers()) do
-	if p ~= player then queryFriend(p) end
-end
-Players.PlayerRemoving:Connect(function() task.defer(refreshList) end)
-
--- ajudar: estado compartilhado com o botão "TP até o jogador" (declarado aqui para o botão enxergar)
-local helpOn = false
-local helpPauseFollow = false -- true enquanto eu seguro o botão "TP até o jogador" com o ajudar ligado
-
-tpBtn.face.Activated:Connect(function()
-	if helpOn then return end -- com o ajudar ligado, o botão só tem a função secreta (segurar), sem teleportar
-	local myHrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-	local targetChar = selectedPlayer and selectedPlayer.Character
-	local targetHrp = targetChar and targetChar:FindFirstChild("HumanoidRootPart")
-	if myHrp and targetHrp then
-		myHrp.CFrame = targetHrp.CFrame * CFrame.new(0, 0, 3)
-	end
-end)
-
--- função secreta (só vale com o "ajudar" ligado): enquanto eu SEGURO este botão, paro de seguir o jogador
--- selecionado; quando solto, volto a segui-lo (para ele não cair)
-tpBtn.face.InputBegan:Connect(function(input)
-	if isPress(input) and helpOn then helpPauseFollow = true end
-end)
-tpBtn.face.InputEnded:Connect(function(input)
-	if isPress(input) then helpPauseFollow = false end
-end)
-UIS.InputEnded:Connect(function(input)
-	if isPress(input) then helpPauseFollow = false end
-end)
-
-refreshList()
-
--- ===== AJUDAR (deitado, só na vertical, segue o jogador selecionado) =====
--- Ligado: fico em estado de "fly" (corpo duro e reto), SEMPRE deitado de barriga para cima, embaixo
--- dos pés do jogador selecionado. Eu só me movo na vertical, com os mesmos botões do Float
--- (subir/descer e as teclas E/Q). Na horizontal eu sigo o jogador selecionado, para ele não cair.
--- Desligado (ou se eu morrer, ou se o jogador sair): levanto em pé onde estou.
-local LIE_OFFSET = 3.5       -- do centro dele até o meu centro deitado (aumente se ele afundar, diminua se ficar alto)
-local FOLLOW_GAIN = 25       -- quão rápido acompanho o jogador na horizontal (maior = mais colado)
-local FOLLOW_MAX = 60        -- velocidade máxima desse acompanhamento (studs por segundo)
-local FOLLOW_SNAP = 40       -- se ele ficar mais longe que isso (ex.: se teleportou), vou direto para baixo dele
-local helpState = nil        -- { bv, bg, hum, conn, yaw } enquanto o ajudar está ligado
-local helpApfPending = false -- o Anti Part Fling estava ligado e volta quando eu terminar
-
-local function targetRoot()
-	local ch = selectedPlayer and selectedPlayer.Character
-	return ch and ch:FindFirstChild("HumanoidRootPart")
-end
-
-local function myRoot()
-	return player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-end
-
--- religa o Anti Part Fling (se ele estava ligado antes do ajudar)
-local function resumeApfAfterHelp()
-	if helpApfPending then
-		helpApfPending = false
-		toggles["Anti Part Fling"](true)
-	end
-end
-
-local function stopHelp()
-	if not helpOn then return end
-	helpOn = false
-	helpPauseFollow = false
-	local s = helpState
-	helpState = nil
-	if s then
-		if s.conn then s.conn:Disconnect() end
-		if s.bv then s.bv:Destroy() end
-		if s.bg then s.bg:Destroy() end
-	end
-	noclip(false)
-
-	-- levanta: de pé de novo, onde estou
-	local r = myRoot()
-	if r and s then
-		r.CFrame = CFrame.new(r.Position + Vector3.new(0, 2.5, 0)) * CFrame.Angles(0, s.yaw, 0)
-		r.AssemblyLinearVelocity = Vector3.zero
-		r.AssemblyAngularVelocity = Vector3.zero
-	end
-	if s and s.hum and s.hum.Parent then
-		s.hum.PlatformStand = false
-		s.hum:ChangeState(Enum.HumanoidStateType.GettingUp)
-	end
-
-	resumeApfAfterHelp()
-	helpBtn.setOn(false)
-	helpBtn.face.Text = "ajudar"
-end
-
-local function startHelp()
-	if helpOn then return end
-	if not targetRoot() then
-		helpBtn.face.Text = "Selecione um jogador"
-		task.delay(1.5, function()
-			if not helpOn then helpBtn.face.Text = "ajudar" end
+		task.spawn(function()
+			local a = apiJson("https://friends.roblox.com/v1/users/" .. userId .. "/friends/count")
+			sFriends(a and tostring(a.count) or "indisponível")
+			local b = apiJson("https://friends.roblox.com/v1/users/" .. userId .. "/followers/count")
+			sFollowers(b and tostring(b.count) or "indisponível")
+			local c = apiJson("https://friends.roblox.com/v1/users/" .. userId .. "/followings/count")
+			sFollowing(c and tostring(c.count) or "indisponível")
 		end)
-		return
-	end
-
-	local char = player.Character
-	local hum = char and char:FindFirstChildOfClass("Humanoid")
-	local mine = myRoot()
-	if not hum or not mine then return end
-
-	helpOn = true
-	helpBtn.setOn(true)
-
-	-- o ajudar tem o próprio voo: desliga Fly, VFly e Float (que usariam os mesmos botões)
-	toggles.Fly(false)
-	toggles.VFly(false)
-	toggles.Float(false)
-	-- o Anti Part Fling tem teto de altura e trava de posição: pausa agora e religa no fim
-	if apfActive then
-		helpApfPending = true
-		toggles["Anti Part Fling"](false)
-	end
-
-	-- deitado de barriga para cima, mantendo para onde eu estava olhando
-	local look = mine.CFrame.LookVector
-	local yaw = math.atan2(-look.X, -look.Z)
-	local lieRot = CFrame.Angles(0, yaw, 0) * CFrame.Angles(math.rad(90), 0, 0)
-
-	-- estado de fly: corpo duro e reto
-	hum.PlatformStand = true
-	noclip(true)
-
-	local bv = Instance.new("BodyVelocity")
-	bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
-	bv.Velocity = Vector3.zero
-	bv.Parent = mine
-
-	local bg = Instance.new("BodyGyro")
-	bg.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
-	bg.P = 9e4
-	bg.CFrame = lieRot -- sempre deitado
-	bg.Parent = mine
-
-	-- vai para baixo dos pés do jogador selecionado
-	local tp = targetRoot().Position
-	mine.CFrame = CFrame.new(tp.X, tp.Y - LIE_OFFSET, tp.Z) * lieRot
-	mine.AssemblyLinearVelocity = Vector3.zero
-	mine.AssemblyAngularVelocity = Vector3.zero
-
-	helpState = { bv = bv, bg = bg, hum = hum, yaw = yaw }
-	helpState.conn = RunService.Heartbeat:Connect(function()
-		local r = myRoot()
-		if not r or player.Character ~= char or hum.Health <= 0 then
-			stopHelp() -- morri ou troquei de personagem
-			return
-		end
-		if not selectedPlayer then
-			stopHelp() -- o jogador saiu do servidor
-			return
-		end
-		hum.PlatformStand = true
-
-		-- vertical: os mesmos botões do Float (subir/descer) e as teclas E/Q
-		local vy = 0
-		if floatUp or UIS:IsKeyDown(Enum.KeyCode.E) then vy += FLOAT_SPEED end
-		if floatDown or UIS:IsKeyDown(Enum.KeyCode.Q) then vy -= FLOAT_SPEED end
-
-		-- horizontal: acompanho o jogador selecionado (fico sempre embaixo dos pés dele)
-		local vx, vz = 0, 0
-		local t = targetRoot()
-		if t and not helpPauseFollow then -- segurando "TP até o jogador": paro de seguir
-			local pos, tpos = r.Position, t.Position
-			local ex, ez = tpos.X - pos.X, tpos.Z - pos.Z
-			if ex * ex + ez * ez > FOLLOW_SNAP * FOLLOW_SNAP then
-				r.CFrame = CFrame.new(tpos.X, pos.Y, tpos.Z) * lieRot
-			else
-				vx, vz = ex * FOLLOW_GAIN, ez * FOLLOW_GAIN
-				local mag = math.sqrt(vx * vx + vz * vz)
-				if mag > FOLLOW_MAX then
-					vx, vz = vx / mag * FOLLOW_MAX, vz / mag * FOLLOW_MAX
+		task.spawn(function()
+			local gr = apiJson("https://groups.roblox.com/v1/users/" .. userId .. "/groups/roles")
+			if gr and type(gr.data) == "table" then
+				local names = {}
+				for i, e in ipairs(gr.data) do
+					if i > 6 then break end
+					names[#names + 1] = (e.group and e.group.name or "?") .. " (" .. (e.role and e.role.name or "?") .. ")"
 				end
+				sGroups(#gr.data .. (#gr.data > 0 and (" — " .. table.concat(names, ", ")) or ""))
+			else
+				sGroups("indisponível")
+			end
+			local nh = apiJson("https://users.roblox.com/v1/users/" .. userId .. "/username-history?limit=10&sortOrder=Desc")
+			if nh and type(nh.data) == "table" then
+				local names = {}
+				for _, e in ipairs(nh.data) do names[#names + 1] = e.name end
+				sNames(#names > 0 and table.concat(names, ", ") or "nenhum")
+			else
+				sNames("indisponível")
+			end
+			local gm = apiJson("https://games.roblox.com/v2/users/" .. userId .. "/games?accessFilter=Public&limit=10&sortOrder=Desc")
+			if gm and type(gm.data) == "table" then
+				local names = {}
+				for i, e in ipairs(gm.data) do
+					if i > 5 then break end
+					names[#names + 1] = e.name
+				end
+				sGames(#gm.data > 0 and table.concat(names, ", ") or "nenhum")
+			else
+				sGames("indisponível")
+			end
+		end)
+	end
+
+	-- ===== PÁGINA: COMPORTAMENTO =====
+	local toggles = {}
+	local function addToggle(page, label, fn)
+		local btn = btnIn(page, label, "Off")
+		local state = false
+		local function setState(v)
+			state = v
+			fn(state)
+			btn.setOn(state)
+		end
+		btn.face.Activated:Connect(function() setState(not state) end)
+		toggles[label] = setState
+		return btn
+	end
+
+	local B = pages.behavior
+	addToggle(B, "AntiFling", antiFling)
+	addToggle(B, "Anti Part Fling", antiPartFling)
+	addToggle(B, "VFly", vfly)
+	addToggle(B, "Fly", fly)
+	addToggle(B, "Float", floatToggle)
+	do
+		local qe = rowIn(B, { "descer", "subir" })
+		holdWire(qe[1], function() floatDown = true end, function() floatDown = false end)
+		holdWire(qe[2], function() floatUp = true end, function() floatUp = false end)
+	end
+	local reBtn = btnIn(B, "resetar", "Off")
+	reBtn.face.Activated:Connect(function()
+		reBtn.setOn(true)
+		respawnHere(function() reBtn.setOn(false) end)
+	end)
+
+	sectionIn(B, "Extras")
+	addToggle(B, "TPTool", tpTool)
+	local setPosBtn = btnIn(B, "Definir posição", "Tp")
+	local farmBtn = btnIn(B, "Auto farm", "Off")
+	setPosBtn.face.Activated:Connect(function()
+		local hrp = farmRoot()
+		if not hrp then return end
+		farmCFrame = hrp.CFrame
+		farmSave()
+		setPosBtn.face.Text = "Posição salva!"
+		task.delay(1.2, function() setPosBtn.face.Text = "Definir posição" end)
+	end)
+	farmBtn.face.Activated:Connect(function()
+		if not farmOn and not farmCFrame then
+			farmBtn.face.Text = "Defina uma posição primeiro"
+			task.delay(1.8, function() farmBtn.face.Text = "Auto farm" end)
+			return
+		end
+		farmEnable(not farmOn)
+		farmBtn.setOn(farmOn)
+	end)
+	-- depois de reconectar: restaura posição e religa o auto farm se estava ativo
+	task.spawn(function()
+		local data = farmLoad()
+		if not data then return end
+		if type(data.cf) == "table" and #data.cf == 12 then
+			farmCFrame = CFrame.new(table.unpack(data.cf))
+		end
+		if data.active and farmCFrame then
+			if not game:IsLoaded() then game.Loaded:Wait() end
+			farmEnable(true)
+			farmBtn.setOn(farmOn)
+			if FARM_ANTIFLING_ON_RELOG and toggles.AntiFling then toggles.AntiFling(true) end
+		end
+	end)
+
+	-- ===== PÁGINA: JOGADORES =====
+	local P = pages.players
+	local selectedPlayer = nil
+	local helpOn = false
+	local helpPauseFollow = false -- segurando "TP até o jogador" com o ajudar ligado (só para de seguir)
+	local frearStart, frearDone = nil, false -- segurando "frear" com o ajudar ligado
+
+	local function flash(btn, text, back)
+		btn.face.Text = text
+		task.delay(1.5, function() if btn.face.Parent then btn.face.Text = back end end)
+	end
+
+	local selLabel = labelIn(P, "Selecionado: nenhum", "muted")
+	local selectBtn = btnIn(P, "Selecionar jogador", "Off")
+	local specBtn = btnIn(P, "Espectar", "Off")
+	local tpBtn = btnIn(P, "TP até o jogador", "Tp")
+	local helpBtn = btnIn(P, "ajudar", "Help")
+	local udRow = rowIn(P, { "descer", "subir" })
+	holdWire(udRow[1], function() floatDown = true end, function() floatDown = false end)
+	holdWire(udRow[2], function() floatUp = true end, function() floatUp = false end)
+	local frearBtn = btnIn(P, "frear", "Help")
+	local profBtn = btnIn(P, "Ver perfil completo", "Net")
+
+	local function updateSelected()
+		if selectedPlayer then
+			selLabel.Text = "Selecionado: <b>" .. esc(selectedPlayer.DisplayName) .. "</b> (@" .. esc(selectedPlayer.Name) .. ")"
+			selectBtn.face.Text = selectedPlayer.DisplayName
+		else
+			selLabel.Text = "Selecionado: nenhum"
+			selectBtn.face.Text = "Selecionar jogador"
+		end
+	end
+
+	-- --- lista para escolher jogador (amigos primeiro) ---
+	local friendCache, friendPending = {}, {}
+	local refreshPicker
+	local function queryFriend(p)
+		if friendCache[p.UserId] ~= nil or friendPending[p.UserId] then return end
+		friendPending[p.UserId] = true
+		task.spawn(function()
+			local ok, res = pcall(function() return player:IsFriendsWith(p.UserId) end)
+			friendPending[p.UserId] = nil
+			friendCache[p.UserId] = (ok and res == true)
+			if currentPage == "picker" and alive then refreshPicker() end
+		end)
+	end
+
+	function refreshPicker()
+		local pk = pages.picker
+		for _, c in ipairs(pk:GetChildren()) do
+			if c:IsA("Frame") then c:Destroy() end
+		end
+		pk:SetAttribute("n", 0)
+		local back = btnIn(pk, "← voltar", "Off")
+		back.face.Activated:Connect(function() showPage("players") end)
+
+		local entries = {}
+		for _, p in ipairs(Players:GetPlayers()) do
+			if p ~= player then
+				queryFriend(p)
+				table.insert(entries, { p = p, friend = friendCache[p.UserId] == true,
+					k1 = string.lower(p.DisplayName), k2 = string.lower(p.Name) })
 			end
 		end
-		bv.Velocity = Vector3.new(vx, vy, vz)
-	end)
-
-	helpBtn.face.Text = "ajudar"
-end
-
-helpBtn.face.Activated:Connect(function()
-	if helpOn then stopHelp() else startHelp() end
-end)
-
--- ===== REJOIN / SERVER HOP (botões) =====
-rejoinBtn.face.Activated:Connect(function()
-	if netBusy then return end
-	netBusy = true
-	rejoinBtn.face.Text = "Reentrando..."
-	rejoinBtn.setOn(true)
-	local ok = rejoinServer()
-	if not ok then rejoinBtn.face.Text = "Falhou" end
-	-- se o teleporte demorar ou falhar, o botão volta ao normal
-	task.delay(ok and 10 or 1.5, function()
-		rejoinBtn.face.Text = "Rejoin"
-		rejoinBtn.setOn(false)
-		netBusy = false
-	end)
-end)
-
-hopBtn.face.Activated:Connect(function()
-	if netBusy then return end
-	netBusy = true
-	hopBtn.face.Text = "Procurando..."
-	hopBtn.setOn(true)
-	local ok, reason = serverHop()
-	if not ok then hopBtn.face.Text = reason or "Falhou" end
-	task.delay(ok and 10 or 1.5, function()
-		hopBtn.face.Text = "Server hop"
-		hopBtn.setOn(false)
-		netBusy = false
-	end)
-end)
-
-backBtn.face.Activated:Connect(function()
-	if netBusy then return end
-	netBusy = true
-	backBtn.face.Text = "Voltando..."
-	backBtn.setOn(true)
-	local ok, reason = backServer()
-	if not ok then backBtn.face.Text = reason or "Falhou" end
-	task.delay(ok and 10 or 1.5, function()
-		backBtn.face.Text = "voltar"
-		backBtn.setOn(false)
-		netBusy = false
-	end)
-end)
-
--- ===== AUTO FARM (botões) =====
-setPosBtn.face.Activated:Connect(function()
-	local hrp = farmRoot()
-	if not hrp then return end
-	farmCFrame = hrp.CFrame
-	farmSave()
-	setPosBtn.face.Text = "Posição salva!"
-	task.delay(1.2, function()
-		setPosBtn.face.Text = "Definir posição"
-	end)
-end)
-
-farmBtn.face.Activated:Connect(function()
-	if not farmOn and not farmCFrame then
-		farmBtn.face.TextSize = 11
-		farmBtn.face.Text = "Defina uma posição primeiro"
-		task.delay(1.8, function()
-			farmBtn.face.Text = "Auto farm"
-			farmBtn.face.TextSize = 16
+		table.sort(entries, function(a, b)
+			if a.friend ~= b.friend then return a.friend end
+			if a.k1 ~= b.k1 then return a.k1 < b.k1 end
+			return a.k2 < b.k2
 		end)
-		return
-	end
-	farmEnable(not farmOn)
-	farmBtn.setOn(farmOn)
-end)
-
--- depois de reconectar: restaura a posição e religa o auto farm se ele estava ativo
-task.spawn(function()
-	local data = farmLoad()
-	if not data then return end
-	if type(data.cf) == "table" and #data.cf == 12 then
-		farmCFrame = CFrame.new(table.unpack(data.cf))
-	end
-	if data.active and farmCFrame then
-		if not game:IsLoaded() then game.Loaded:Wait() end
-		farmEnable(true)
-		farmBtn.setOn(farmOn)
-		-- depois de relogar, já deixa o AntiFling ligado (e o botão aceso)
-		if FARM_ANTIFLING_ON_RELOG then
-			toggles.AntiFling(true)
-		end
-	end
-end)
-
--- ===== FECHAR (desliga tudo e apaga o menu) =====
--- Depois de fechar, o script pode ser executado de novo (a verificação do início não acha mais nenhum menu aberto).
-closeBtn.face.Activated:Connect(function()
-	-- desliga o que estiver ligado
-	pcall(function() if helpOn then stopHelp() end end)
-	for _, setState in pairs(toggles) do pcall(setState, false) end
-	pcall(function() if farmOn then farmEnable(false) end end)
-	-- solta as conexões que o script guardou e apaga o menu
-	for key, c in pairs(conns) do
-		pcall(function() c:Disconnect() end)
-		conns[key] = nil
-	end
-	gui:Destroy()
-end)
-
--- ===== ABRIR / FECHAR O PAINEL (com animação) =====
-local panelOpen = false
-local function setPanel(open)
-	panelOpen = open
-	if not IS_ROMANTIC then
-		tween(bubble, 0.25, { BackgroundColor3 = open and T.bubbleBgOpen or T.bubbleBg })
-	end
-	if open then
-		panel.Visible = true
-		panelScale.Scale = 0.6
-		tween(panelScale, 0.28, { Scale = 1 }, Enum.EasingStyle.Back)
-	else
-		if listOpen then setList(false) end
-		local t = tween(panelScale, 0.15, { Scale = 0.6 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
-		t.Completed:Connect(function()
-			if not panelOpen then panel.Visible = false end
-		end)
-	end
-end
-
--- ===== TROCA PARA A VERSÃO DARK (o coração vermelho vira preto) =====
-local HOLD_TIME = 1 -- segundos segurando o coração
-local themeSwitching = false
-
-local function applyDarkTheme()
-	T = THEMES.dark
-	IS_ROMANTIC = false
-
-	-- botões 3D: trocam para as cores equivalentes do tema dark (mantendo ligado/desligado)
-	for _, obj in ipairs(themed3D) do
-		if obj.holder.Parent then
-			obj.face.Font = T.font
-			tween(obj.face, 0.35, {
-				BackgroundColor3 = obj.isOn and T.faceOn or T["face" .. obj.role],
-				TextColor3 = obj.isOn and T.textOn or T.text,
-			})
-			tween(obj.base, 0.35, { BackgroundColor3 = obj.isOn and T.baseOn or T["base" .. obj.role] })
-		end
-	end
-
-	-- degradê do painel e da lista, e barras de rolagem
-	for _, g in ipairs(gradients) do
-		if g.Parent then
-			g.Color = ColorSequence.new(T.panelTop, T.panelBottom)
-		end
-	end
-	content.ScrollBarImageColor3 = T.scroll
-	list.ScrollBarImageColor3 = T.scroll
-
-	-- o coração vira o retângulo "Zahid painel" em fonte emo
-	BUBBLE_H = 34
-	bubble.Size = UDim2.fromOffset(120, 34)
-	bubble.Text = "Zahid painel"
-	bubble.Font = EMO_FONT
-	bubble.TextColor3 = T.text
-	bubble.BackgroundColor3 = T.bubbleBg
-	bubble.BackgroundTransparency = 0
-	Instance.new("UICorner", bubble).CornerRadius = UDim.new(0, 10)
-	local bubbleLimit = Instance.new("UITextSizeConstraint")
-	bubbleLimit.MaxTextSize = 20
-	bubbleLimit.Parent = bubble
-	panel.Position = UDim2.fromOffset(0, BUBBLE_H + 8)
-end
-
--- animação (1,6 s): o coração treme e a tela escurece > racha (💔) com um anel de luz e
--- estilhaços > renasce preto (🖤) > vira a versão dark
-local function playHeartToBlack(onSwitch)
-	-- fecha o menu, se estiver aberto
-	if panelOpen then setPanel(false) end
-
-	-- centro do coração (mesmo espaço de coordenadas da interface do menu)
-	local cx = bubble.Position.X.Offset + 24
-	local cy = bubble.Position.Y.Offset + 24
-
-	-- a tela escurece atrás do menu
-	local fx = Instance.new("ScreenGui")
-	fx.Name = "HeartSwitchFx"
-	fx.IgnoreGuiInset = true
-	fx.ResetOnSpawn = false
-	fx.DisplayOrder = -1
-	fx.Parent = player:WaitForChild("PlayerGui")
-
-	local shade = Instance.new("Frame")
-	shade.Size = UDim2.fromScale(1, 1)
-	shade.BackgroundColor3 = Color3.new(0, 0, 0)
-	shade.BackgroundTransparency = 1
-	shade.BorderSizePixel = 0
-	shade.Parent = fx
-
-	local function newEmoji(emoji, size)
-		local l = Instance.new("TextLabel")
-		l.BackgroundTransparency = 1
-		l.Text = emoji
-		l.Font = Enum.Font.GothamMedium
-		l.TextSize = size
-		l.Size = UDim2.fromOffset(size + 10, size + 10)
-		l.AnchorPoint = Vector2.new(0.5, 0.5)
-		l.Position = UDim2.fromOffset(cx, cy)
-		l.ZIndex = 5
-		l.Parent = gui
-		return l
-	end
-
-	-- estilhaços: pequenos emojis que saem do coração, giram e somem
-	local function burst(emoji, count, minDist, maxDist, size, time)
-		for _ = 1, count do
-			local l = newEmoji(emoji, size)
-			local a = math.random() * math.pi * 2
-			local d = math.random(minDist, maxDist)
-			l.Rotation = math.random(-40, 40)
-			tween(l, time, {
-				Position = UDim2.fromOffset(cx + math.cos(a) * d, cy + math.sin(a) * d),
-				Rotation = l.Rotation + math.random(-260, 260),
-			}, Enum.EasingStyle.Quint)
-			task.delay(time * 0.4, function()
-				tween(l, time * 0.6, { TextTransparency = 1 }, Enum.EasingStyle.Linear)
+		if #entries == 0 then labelIn(pk, "Ninguém além de você no servidor.", "muted") end
+		for _, e in ipairs(entries) do
+			local p = e.p
+			local item = new3DButton(pk, p.DisplayName .. " (@" .. p.Name .. ")", UDim2.new(),
+				UDim2.new(1, 0, 0, 32), e.friend and "Net" or "Off")
+			item.holder.LayoutOrder = nextOrder(pk)
+			item.face.TextSize = 13
+			item.face.TextXAlignment = Enum.TextXAlignment.Left
+			local fpad = Instance.new("UIPadding", item.face)
+			fpad.PaddingLeft = UDim.new(0, 34)
+			fpad.PaddingRight = UDim.new(0, 4)
+			local img = Instance.new("ImageLabel")
+			img.Size = UDim2.fromOffset(22, 22)
+			img.Position = UDim2.new(0, -28, 0.5, -11)
+			img.BackgroundTransparency = 1
+			img.Image = "rbxthumb://type=AvatarHeadshot&id=" .. p.UserId .. "&w=48&h=48"
+			img.Parent = item.face
+			Instance.new("UICorner", img).CornerRadius = UDim.new(1, 0)
+			item.face.Activated:Connect(function()
+				selectedPlayer = p
+				updateSelected()
+				showPage("players")
 			end)
-			task.delay(time + 0.05, function() l:Destroy() end)
 		end
 	end
 
-	-- anel de luz que se expande
-	local function ring()
-		local r = Instance.new("Frame")
-		r.AnchorPoint = Vector2.new(0.5, 0.5)
-		r.Position = UDim2.fromOffset(cx, cy)
-		r.Size = UDim2.fromOffset(10, 10)
-		r.BackgroundTransparency = 1
-		r.ZIndex = 4
-		r.Parent = gui
-		Instance.new("UICorner", r).CornerRadius = UDim.new(1, 0)
-		local s = Instance.new("UIStroke")
-		s.Color = Color3.fromRGB(255, 255, 255)
-		s.Thickness = 3
-		s.Parent = r
-		tween(r, 0.45, { Size = UDim2.fromOffset(260, 260) }, Enum.EasingStyle.Quint)
-		tween(s, 0.45, { Transparency = 1 })
-		task.delay(0.5, function() r:Destroy() end)
+	selectBtn.face.Activated:Connect(function()
+		refreshPicker()
+		showPage("picker")
+	end)
+	table.insert(uiConns, Players.PlayerAdded:Connect(function(p)
+		queryFriend(p)
+		if currentPage == "picker" then refreshPicker() end
+	end))
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= player then queryFriend(p) end
 	end
 
-	-- 1) o coração bate rápido e treme cada vez mais, enquanto a tela escurece (0,55 s)
-	local SHAKE = 0.55
-	tween(bubbleScale, SHAKE, { Scale = 1.4 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
-	tween(shade, SHAKE, { BackgroundTransparency = 0.65 })
-	local t0 = os.clock()
-	while os.clock() - t0 < SHAKE do
-		local k = (os.clock() - t0) / SHAKE
-		local amp = 1 + k * 8
-		bubble.Rotation = (math.random() * 2 - 1) * amp
-		RunService.RenderStepped:Wait()
+	-- --- espectar ---
+	local spectating = nil
+	local function stopSpectate()
+		spectating = nil
+		local cam = workspace.CurrentCamera
+		local h = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+		if cam and h then cam.CameraSubject = h end
+		specBtn.face.Text = "Espectar"
+		specBtn.setOn(false)
 	end
-	bubble.Rotation = 0
+	specBtn.face.Activated:Connect(function()
+		if spectating then
+			stopSpectate()
+			return
+		end
+		local ch = selectedPlayer and selectedPlayer.Character
+		local h = ch and ch:FindFirstChildOfClass("Humanoid")
+		if not h then
+			flash(specBtn, "Selecione um jogador", "Espectar")
+			return
+		end
+		spectating = selectedPlayer
+		workspace.CurrentCamera.CameraSubject = h
+		specBtn.face.Text = "Parar de espectar"
+		specBtn.setOn(true)
+	end)
+	table.insert(uiConns, RunService.Heartbeat:Connect(function()
+		if not spectating then return end
+		if not spectating.Parent then
+			stopSpectate()
+			return
+		end
+		local h = spectating.Character and spectating.Character:FindFirstChildOfClass("Humanoid")
+		local cam = workspace.CurrentCamera
+		if h and cam and cam.CameraSubject ~= h then cam.CameraSubject = h end
+	end))
 
-	-- 2) racha: vira 💔, com um anel de luz e estilhaços vermelhos (0,3 s)
-	bubble.Text = "💔"
-	ring()
-	burst("❤️", 10, 60, 140, 22, 0.7)
-	tween(bubbleScale, 0.12, { Scale = 0.85 })
-	task.wait(0.3)
+	-- --- TP até o jogador ---
+	tpBtn.face.Activated:Connect(function()
+		if helpOn then return end -- com o ajudar ligado, segurar o botão só para de seguir
+		local myHrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+		local tc = selectedPlayer and selectedPlayer.Character
+		local tHrp = tc and tc:FindFirstChild("HumanoidRootPart")
+		if myHrp and tHrp then
+			myHrp.CFrame = tHrp.CFrame * CFrame.new(0, 0, 3)
+		else
+			flash(tpBtn, "Selecione um jogador", "TP até o jogador")
+		end
+	end)
+	tpBtn.face.InputBegan:Connect(function(input)
+		if isPress(input) and helpOn then helpPauseFollow = true end
+	end)
+	tpBtn.face.InputEnded:Connect(function(input)
+		if isPress(input) then helpPauseFollow = false end
+	end)
 
-	-- 3) renasce preto: o 🖤 aparece com um pop (0,35 s)
-	bubble.Text = "🖤"
-	bubbleScale.Scale = 0.5
-	tween(bubbleScale, 0.35, { Scale = 1.15 }, Enum.EasingStyle.Back)
-	tween(shade, 0.25, { BackgroundTransparency = 0.4 })
-	burst("🖤", 6, 50, 110, 20, 0.6)
-	task.wait(0.35)
+	-- ===== AJUDAR (deitado, só na vertical, segue o jogador selecionado) =====
+	local LIE_OFFSET = 3.5   -- do centro dele até o meu centro deitado
+	local FOLLOW_GAIN = 25   -- quão rápido acompanho na horizontal
+	local FOLLOW_MAX = 60    -- velocidade máxima desse acompanhamento
+	local FOLLOW_SNAP = 40   -- mais longe que isso (ex.: ele se teleportou): vou direto para baixo dele
+	local FREAR_DELAY = 1    -- segundos freado até o teleporte
+	local FREAR_DROP = 2     -- studs a mais abaixo da posição normal do ajudar
+	local helpState = nil
+	local helpApfPending = false
 
-	-- 4) vira a versão dark: o coração vira o retângulo "Zahid painel" (0,4 s)
-	onSwitch()
-	bubbleScale.Scale = 0.6
-	tween(bubbleScale, 0.35, { Scale = 1 }, Enum.EasingStyle.Back)
-	tween(shade, 0.4, { BackgroundTransparency = 1 })
-	task.wait(0.4)
-	fx:Destroy()
-end
+	local function targetRoot()
+		local ch = selectedPlayer and selectedPlayer.Character
+		return ch and ch:FindFirstChild("HumanoidRootPart")
+	end
+	local function myRoot()
+		return player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+	end
 
--- ===== ARRASTAR O BOTÃO / CLICAR ABRE O MENU =====
-local dragging, startPos, startInput, moved
-local holdToken = 0
-bubble.InputBegan:Connect(function(input)
-	if isPress(input) then
-		dragging, moved = true, false
-		startPos, startInput = bubble.Position, input.Position
+	local function stopHelp()
+		if not helpOn then return end
+		helpOn = false
+		helpPauseFollow = false
+		frearStart, frearDone = nil, false
+		local s = helpState
+		helpState = nil
+		if s then
+			if s.conn then s.conn:Disconnect() end
+			if s.bv then s.bv:Destroy() end
+			if s.bg then s.bg:Destroy() end
+		end
+		noclip(false)
+		local r = myRoot()
+		if r and s then
+			r.CFrame = CFrame.new(r.Position + Vector3.new(0, 2.5, 0)) * CFrame.Angles(0, s.yaw, 0)
+			r.AssemblyLinearVelocity = Vector3.zero
+			r.AssemblyAngularVelocity = Vector3.zero
+		end
+		if s and s.hum and s.hum.Parent then
+			s.hum.PlatformStand = false
+			s.hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+		end
+		if helpApfPending then
+			helpApfPending = false
+			toggles["Anti Part Fling"](true)
+		end
+		helpBtn.setOn(false)
+		helpBtn.face.Text = "ajudar"
+	end
 
-		-- segurar o coração vermelho por 1 segundo: ele vira preto e abre a versão dark
-		holdToken += 1
-		local token = holdToken
-		if IS_ROMANTIC then
-			task.delay(HOLD_TIME, function()
-				if token == holdToken and dragging and not moved and IS_ROMANTIC and not themeSwitching then
-					dragging = false -- ao soltar, não abre nem fecha o menu
-					themeSwitching = true
-					playHeartToBlack(applyDarkTheme)
-					themeSwitching = false
+	local function startHelp()
+		if helpOn then return end
+		if not targetRoot() then
+			flash(helpBtn, "Selecione um jogador", "ajudar")
+			return
+		end
+		local char = player.Character
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		local mine = myRoot()
+		if not hum or not mine then return end
+
+		helpOn = true
+		helpBtn.setOn(true)
+		toggles.Fly(false)
+		toggles.VFly(false)
+		toggles.Float(false)
+		if apfActive then
+			helpApfPending = true
+			toggles["Anti Part Fling"](false)
+		end
+
+		local look = mine.CFrame.LookVector
+		local yaw = math.atan2(-look.X, -look.Z)
+		local lieRot = CFrame.Angles(0, yaw, 0) * CFrame.Angles(math.rad(90), 0, 0)
+
+		hum.PlatformStand = true
+		noclip(true)
+
+		local bv = Instance.new("BodyVelocity")
+		bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+		bv.Velocity = Vector3.zero
+		bv.Parent = mine
+		local bg = Instance.new("BodyGyro")
+		bg.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
+		bg.P = 9e4
+		bg.CFrame = lieRot
+		bg.Parent = mine
+
+		local tp = targetRoot().Position
+		mine.CFrame = CFrame.new(tp.X, tp.Y - LIE_OFFSET, tp.Z) * lieRot
+		mine.AssemblyLinearVelocity = Vector3.zero
+		mine.AssemblyAngularVelocity = Vector3.zero
+
+		helpState = { bv = bv, bg = bg, hum = hum, yaw = yaw }
+		helpState.conn = RunService.Heartbeat:Connect(function()
+			local r = myRoot()
+			if not r or player.Character ~= char or hum.Health <= 0 then
+				stopHelp()
+				return
+			end
+			if not selectedPlayer or not selectedPlayer.Parent then
+				stopHelp()
+				return
+			end
+			hum.PlatformStand = true
+
+			local vy = 0
+			if floatUp or UIS:IsKeyDown(Enum.KeyCode.E) then vy += FLOAT_SPEED end
+			if floatDown or UIS:IsKeyDown(Enum.KeyCode.Q) then vy -= FLOAT_SPEED end
+
+			local vx, vz = 0, 0
+			local t = targetRoot()
+			if t then
+				if helpPauseFollow or frearStart ~= nil then
+					-- freado: parado; depois de 1s freado, teleporta 2 studs abaixo do lugar normal do ajudar
+					if frearStart and not frearDone and os.clock() - frearStart >= FREAR_DELAY then
+						frearDone = true
+						local tpos = t.Position
+						r.CFrame = CFrame.new(tpos.X, tpos.Y - LIE_OFFSET - FREAR_DROP, tpos.Z) * lieRot
+						r.AssemblyLinearVelocity = Vector3.zero
+					end
+				else
+					local pos, tpos = r.Position, t.Position
+					local ex, ez = tpos.X - pos.X, tpos.Z - pos.Z
+					if ex * ex + ez * ez > FOLLOW_SNAP * FOLLOW_SNAP then
+						r.CFrame = CFrame.new(tpos.X, pos.Y, tpos.Z) * lieRot
+					else
+						vx, vz = ex * FOLLOW_GAIN, ez * FOLLOW_GAIN
+						local mag = math.sqrt(vx * vx + vz * vz)
+						if mag > FOLLOW_MAX then
+							vx, vz = vx / mag * FOLLOW_MAX, vz / mag * FOLLOW_MAX
+						end
+					end
 				end
+			end
+			bv.Velocity = Vector3.new(vx, vy, vz)
+		end)
+	end
+
+	helpBtn.face.Activated:Connect(function()
+		if helpOn then stopHelp() else startHelp() end
+	end)
+
+	-- frear: segura para parar de seguir; depois de 1s teleporta abaixo; solta e volta a seguir
+	holdWire(frearBtn, function()
+		if helpOn then
+			frearStart = os.clock()
+			frearDone = false
+		end
+	end, function()
+		frearStart, frearDone = nil, false
+	end)
+	table.insert(uiConns, UIS.InputEnded:Connect(function(input)
+		if isPress(input) then
+			helpPauseFollow = false
+			frearStart, frearDone = nil, false
+		end
+	end))
+
+	profBtn.face.Activated:Connect(function()
+		if not selectedPlayer then
+			flash(profBtn, "Selecione um jogador", "Ver perfil completo")
+			return
+		end
+		openProfile(selectedPlayer.UserId, selectedPlayer.Name, selectedPlayer.DisplayName)
+	end)
+
+	table.insert(uiConns, Players.PlayerRemoving:Connect(function(p)
+		if currentPage == "picker" then task.defer(function() if alive then refreshPicker() end end) end
+		if p == selectedPlayer then
+			if spectating == p then stopSpectate() end
+			selectedPlayer = nil
+			updateSelected()
+		end
+	end))
+
+	do
+	-- ===== PÁGINA: SERVER =====
+	local S = pages.server
+	local netRow = rowIn(S, { "Rejoin", "Server hop" }, { "Net", "Net" })
+	local rejoinBtn, hopBtn = netRow[1], netRow[2]
+	local backBtn = btnIn(S, "voltar", "Net")
+
+	rejoinBtn.face.Activated:Connect(function()
+		if netBusy then return end
+		netBusy = true
+		rejoinBtn.face.Text = "Reentrando..."
+		rejoinBtn.setOn(true)
+		local ok = rejoinServer()
+		if not ok then rejoinBtn.face.Text = "Falhou" end
+		task.delay(ok and 10 or 1.5, function()
+			rejoinBtn.face.Text = "Rejoin"
+			rejoinBtn.setOn(false)
+			netBusy = false
+		end)
+	end)
+	hopBtn.face.Activated:Connect(function()
+		if netBusy then return end
+		netBusy = true
+		hopBtn.face.Text = "Procurando..."
+		hopBtn.setOn(true)
+		local ok, reason = serverHop()
+		if not ok then hopBtn.face.Text = reason or "Falhou" end
+		task.delay(ok and 10 or 1.5, function()
+			hopBtn.face.Text = "Server hop"
+			hopBtn.setOn(false)
+			netBusy = false
+		end)
+	end)
+	backBtn.face.Activated:Connect(function()
+		if netBusy then return end
+		netBusy = true
+		backBtn.face.Text = "Voltando..."
+		backBtn.setOn(true)
+		local ok, reason = backServer()
+		if not ok then backBtn.face.Text = reason or "Falhou" end
+		task.delay(ok and 10 or 1.5, function()
+			backBtn.face.Text = "voltar"
+			backBtn.setOn(false)
+			netBusy = false
+		end)
+	end)
+
+	-- --- browser de servidores (só do jogo atual) ---
+	sectionIn(S, "Browser de servidores")
+	local PER_PAGE = 5
+	local SORTS = {
+		{ "Mais cheios", function(a, b) return a.playing > b.playing end },
+		{ "Mais vazios", function(a, b) return a.playing < b.playing end },
+		{ "Menor ping", function(a, b) return (a.ping or 9e9) < (b.ping or 9e9) end },
+		{ "Maior ping", function(a, b) return (a.ping or -1) > (b.ping or -1) end },
+	}
+	local MIN_OPTS = { 0, 5, 10, 20 }
+	local PING_OPTS = { 0, 100, 200, 300 } -- 0 = qualquer
+	local sortIdx, minIdx, pingIdx, svPage = 1, 1, 1, 1
+	local svAll, svBusy, svLoaded = {}, false, false
+
+	local ctl1 = rowIn(S, { "Refresh", SORTS[1][1] }, { "Net", "Off" })
+	local ctl2 = rowIn(S, { "Jogadores: todos", "Ping: todos" }, { "Off", "Off" })
+	ctl2[1].face.TextSize, ctl2[2].face.TextSize = 12, 12
+	local svStatus = labelIn(S, "Toque em Refresh para listar os servidores.", "muted")
+	local cardsFrame = Instance.new("Frame")
+	cardsFrame.BackgroundTransparency = 1
+	cardsFrame.Size = UDim2.new(1, 0, 0, 0)
+	cardsFrame.AutomaticSize = Enum.AutomaticSize.Y
+	cardsFrame.LayoutOrder = nextOrder(S)
+	cardsFrame.Parent = S
+	local cl = Instance.new("UIListLayout", cardsFrame)
+	cl.Padding = UDim.new(0, 6)
+	cl.SortOrder = Enum.SortOrder.LayoutOrder
+	local navRow = rowIn(S, { "Anterior", "Próxima" }, { "Net", "Net" })
+
+	local function myPing() return math.floor(player:GetNetworkPing() * 2000) end
+
+	local function makeCard(order, playing, maxP, ping, idText, joinId)
+		local isCurrent = joinId == nil
+		local card = Instance.new("Frame")
+		card.Size = UDim2.new(1, 0, 0, isCurrent and 88 or 52)
+		card.LayoutOrder = order
+		card.Parent = cardsFrame
+		cornerCard(card)
+		local txt = Instance.new("TextLabel")
+		txt.BackgroundTransparency = 1
+		txt.Position = UDim2.fromOffset(10, 4)
+		txt.Size = UDim2.new(1, -86, 0, 44)
+		txt.TextXAlignment = Enum.TextXAlignment.Left
+		txt.TextWrapped = true
+		txt.RichText = true
+		txt.TextSize = 13
+		txt.Text = "<b>" .. playing .. "/" .. maxP .. "</b> jogadores  •  ping <b>" .. (ping and (ping .. " ms") or "?")
+			.. "</b>\n" .. esc(idText)
+		txt.Parent = card
+		reg(txt, function() txt.Font = T.font txt.TextColor3 = T.text end)
+		local jb = new3DButton(card, isCurrent and "Atual" or "Entrar", UDim2.new(1, -74, 0, 10),
+			UDim2.fromOffset(66, 32), "Net")
+		jb.face.TextSize = 13
+		if isCurrent then
+			jb.setOn(true)
+			-- fotos dos jogadores deste servidor: toque para abrir o perfil
+			local strip = Instance.new("ScrollingFrame")
+			strip.BackgroundTransparency = 1
+			strip.BorderSizePixel = 0
+			strip.Position = UDim2.fromOffset(8, 54)
+			strip.Size = UDim2.new(1, -16, 0, 30)
+			strip.ScrollBarThickness = 0
+			strip.AutomaticCanvasSize = Enum.AutomaticSize.X
+			strip.CanvasSize = UDim2.new()
+			strip.ScrollingDirection = Enum.ScrollingDirection.X
+			strip.Parent = card
+			local sl = Instance.new("UIListLayout", strip)
+			sl.FillDirection = Enum.FillDirection.Horizontal
+			sl.Padding = UDim.new(0, 4)
+			for _, p in ipairs(Players:GetPlayers()) do
+				local ib = Instance.new("ImageButton")
+				ib.Size = UDim2.fromOffset(28, 28)
+				ib.BackgroundTransparency = 0.4
+				ib.Image = "rbxthumb://type=AvatarHeadshot&id=" .. p.UserId .. "&w=48&h=48"
+				ib.Parent = strip
+				Instance.new("UICorner", ib).CornerRadius = UDim.new(1, 0)
+				ib.Activated:Connect(function()
+					playSfx()
+					openProfile(p.UserId, p.Name, p.DisplayName)
+				end)
+			end
+		else
+			jb.face.Activated:Connect(function()
+				jb.face.Text = "..."
+				local ok = pcall(function() TeleportService:TeleportToPlaceInstance(game.PlaceId, joinId, player) end)
+				if not ok then flash(jb, "Falhou", "Entrar") end
 			end)
 		end
 	end
-end)
-UIS.InputChanged:Connect(function(input)
-	if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
-		or input.UserInputType == Enum.UserInputType.Touch) then
-		local d = input.Position - startInput
-		if d.Magnitude > 6 then moved = true end
-		bubble.Position = UDim2.fromOffset(startPos.X.Offset + d.X, startPos.Y.Offset + d.Y)
-	end
-end)
-UIS.InputEnded:Connect(function(input)
-	if dragging and isPress(input) then
-		dragging = false
-		if not moved then
-			setPanel(not panelOpen)
+
+	local function renderServers()
+		for _, c in ipairs(cardsFrame:GetChildren()) do
+			if c:IsA("Frame") then c:Destroy() end
 		end
+		-- servidor atual sempre fixo no topo (as fotos só existem aqui: o Roblox esconde quem está nos outros)
+		makeCard(0, #Players:GetPlayers(), Players.MaxPlayers, myPing(), "Servidor atual  " .. string.sub(game.JobId, 1, 8), nil)
+
+		local minP, maxPing = MIN_OPTS[minIdx], PING_OPTS[pingIdx]
+		local view = {}
+		for _, sv in ipairs(svAll) do
+			if sv.id ~= game.JobId and type(sv.playing) == "number" and sv.playing >= minP
+				and (maxPing == 0 or (type(sv.ping) == "number" and sv.ping <= maxPing)) then
+				table.insert(view, sv)
+			end
+		end
+		table.sort(view, SORTS[sortIdx][2])
+		local pagesN = math.max(1, math.ceil(#view / PER_PAGE))
+		svPage = math.clamp(svPage, 1, pagesN)
+		for i = (svPage - 1) * PER_PAGE + 1, math.min(#view, svPage * PER_PAGE) do
+			local sv = view[i]
+			makeCard(i, sv.playing, sv.maxPlayers or "?", type(sv.ping) == "number" and sv.ping or nil,
+				"ID " .. string.sub(sv.id, 1, 8), sv.id)
+		end
+		svStatus.Text = #view .. " servidores  •  página " .. svPage .. "/" .. pagesN
 	end
-end)
 
--- ===== BOTÃO INICIAR (coração com a frase) =====
-local function showStartButton()
-	local startGui = Instance.new("ScreenGui")
-	startGui.Name = "StartGui"
-	startGui.IgnoreGuiInset = true
-	startGui.ResetOnSpawn = false
-	startGui.DisplayOrder = 100
-	startGui.Parent = player:WaitForChild("PlayerGui")
+	local function fetchServers()
+		if svBusy then return end
+		svBusy = true
+		svStatus.Text = "Buscando servidores..."
+		task.spawn(function()
+			local all, cursor, err = {}, nil, nil
+			for _ = 1, 3 do -- até 300 servidores
+				local url = "https://games.roblox.com/v1/games/" .. game.PlaceId
+					.. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100"
+				if cursor then url = url .. "&cursor=" .. cursor end
+				local data = apiJson(url)
+				if not data or type(data.data) ~= "table" then
+					err = "sem resposta do Roblox (limite ou sem http)"
+					break
+				end
+				for _, sv in ipairs(data.data) do all[#all + 1] = sv end
+				if type(data.nextPageCursor) ~= "string" then break end
+				cursor = data.nextPageCursor
+				task.wait(0.4)
+			end
+			svBusy = false
+			if not alive then return end
+			if #all == 0 and err then
+				svStatus.Text = "Falhou: " .. err
+				return
+			end
+			svAll, svLoaded, svPage = all, true, 1
+			renderServers()
+		end)
+	end
 
-	local btn = Instance.new("TextButton")
-	btn.Size = UDim2.fromOffset(110, 110)
-	btn.AnchorPoint = Vector2.new(0.5, 0.5)
-	btn.Position = UDim2.fromScale(0.5, 0.5)
-	btn.BackgroundTransparency = 1
-	btn.Text = ""
-	btn.Parent = startGui
+	ctl1[1].face.Activated:Connect(fetchServers)
+	ctl1[2].face.Activated:Connect(function()
+		sortIdx = sortIdx % #SORTS + 1
+		ctl1[2].face.Text = SORTS[sortIdx][1]
+		svPage = 1
+		if svLoaded then renderServers() end
+	end)
+	ctl2[1].face.Activated:Connect(function()
+		minIdx = minIdx % #MIN_OPTS + 1
+		ctl2[1].face.Text = minIdx == 1 and "Jogadores: todos" or ("Jogadores: " .. MIN_OPTS[minIdx] .. "+")
+		svPage = 1
+		if svLoaded then renderServers() end
+	end)
+	ctl2[2].face.Activated:Connect(function()
+		pingIdx = pingIdx % #PING_OPTS + 1
+		ctl2[2].face.Text = pingIdx == 1 and "Ping: todos" or ("Ping: até " .. PING_OPTS[pingIdx])
+		svPage = 1
+		if svLoaded then renderServers() end
+	end)
+	navRow[1].face.Activated:Connect(function()
+		if svLoaded and svPage > 1 then svPage -= 1 renderServers() end
+	end)
+	navRow[2].face.Activated:Connect(function()
+		if svLoaded then svPage += 1 renderServers() end
+	end)
+	catButtons.server.face.Activated:Connect(function()
+		if not svLoaded and not svBusy then fetchServers() end
+	end)
 
-	local sc = Instance.new("UIScale")
-	sc.Scale = 0.02
-	sc.Parent = btn
+	-- ===== PÁGINA: UPDATES =====
+	local U = pages.updates
+	labelIn(U, "<b>Versão atual: v" .. VERSION .. "</b>", nil, 15)
+	for i, e in ipairs(CHANGELOG) do
+		sectionIn(U, "v" .. e.v .. "  •  " .. e.date .. (i == 1 and "  (atual)" or ""))
+		local function block(name, list)
+			if not list or #list == 0 then return end
+			labelIn(U, "<b>" .. name .. "</b>", nil, 13)
+			for _, item in ipairs(list) do labelIn(U, "• " .. esc(item), "muted", 12) end
+		end
+		block("Adicionado", e.added)
+		block("Alterado", e.changed)
+		block("Removido", e.removed)
+	end
 
-	-- o coração
-	local heart = Instance.new("TextLabel")
-	heart.Size = UDim2.fromScale(1, 1)
-	heart.BackgroundTransparency = 1
-	heart.Text = "❤️"
-	heart.Font = Enum.Font.GothamMedium
-	heart.TextSize = 100
-	heart.Parent = btn
+	-- ===== PÁGINA: CONFIGURAÇÕES =====
+	local C = pages.config
+	sectionIn(C, "Tema")
+	local th = rowIn(C, { "Escuro", "Claro" })
+	th[1].setOn(settings.theme == "dark")
+	th[2].setOn(settings.theme == "light")
+	th[1].face.Activated:Connect(function() applyTheme("dark") th[1].setOn(true) th[2].setOn(false) end)
+	th[2].face.Activated:Connect(function() applyTheme("light") th[1].setOn(false) th[2].setOn(true) end)
 
-	-- a frase por cima do coração (texto separado, por isso aceita outra fonte)
-	local phrase = Instance.new("TextLabel")
-	phrase.Size = UDim2.fromScale(0.7, 0.4)
-	phrase.AnchorPoint = Vector2.new(0.5, 0.5)
-	phrase.Position = UDim2.fromScale(0.5, 0.43) -- 0.5 = centro; menor = mais para cima
-	phrase.BackgroundTransparency = 1
-	phrase.Text = "te amo\nmi amore"
-	phrase.Font = ROMANTIC_FONT
-	phrase.TextScaled = true
-	phrase.TextColor3 = Color3.new(1, 1, 1)
-	phrase.TextStrokeColor3 = Color3.fromRGB(120, 0, 40)
-	phrase.TextStrokeTransparency = 0.4
-	phrase.Parent = btn
+	sectionIn(C, "Sons")
+	local SND = { "pop", "click", "gota" }
+	local snd = rowIn(C, { "Pop", "Click", "Gota" })
+	local sOn = btnIn(C, settings.soundOn and "Sons: ligados" or "Sons: desligados", "Off")
+	sOn.setOn(settings.soundOn)
+	for i, b in ipairs(snd) do
+		b.setOn(settings.sound == SND[i])
+		b.face.Activated:Connect(function()
+			settings.sound = SND[i]
+			for j, other in ipairs(snd) do other.setOn(j == i) end
+			saveJson(SETTINGS_FILE, settings)
+			task.delay(0.12, function() playSfx(SND[i]) end) -- toca o som escolhido como amostra
+		end)
+	end
+	sOn.face.Activated:Connect(function()
+		settings.soundOn = not settings.soundOn
+		sOn.setOn(settings.soundOn)
+		sOn.face.Text = settings.soundOn and "Sons: ligados" or "Sons: desligados"
+		saveJson(SETTINGS_FILE, settings)
+	end)
 
-	-- aparece com um pop e fica "batendo" como um coração
-	tween(sc, 0.5, { Scale = 1 }, Enum.EasingStyle.Back).Completed:Wait()
-	local pulse = TweenService:Create(
-		sc,
-		TweenInfo.new(0.6, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
-		{ Scale = 1.1 }
-	)
-	pulse:Play()
+	sectionIn(C, "Compatibilidade do executor")
+	local function yn(v) return v and "sim" or "não" end
+	local hasReq = (request or http_request or (syn and syn.request)) ~= nil
+	local hasQueue = (queue_on_teleport or (syn and syn.queue_on_teleport)) ~= nil
+	labelIn(C, "HTTP (request): " .. yn(hasReq) .. "\nArquivos (salvar tema/histórico): " .. yn(hasFS)
+		.. "\nReabrir após teleporte (queue): " .. yn(hasQueue)
+		.. "\nSem HTTP o browser de servidores e o perfil ficam limitados; sem arquivos, nada é salvo ao fechar o jogo.",
+		"muted", 12)
 
-	-- espera o clique
-	btn.Activated:Wait()
-	pulse:Cancel()
+	sectionIn(C, "Painel")
+	local closeBtn = btnIn(C, "Fechar painel (desliga tudo)", "Off")
 
-	-- pop: cresce um pouco, fica minúsculo e some
-	tween(sc, 0.15, { Scale = 1.3 }).Completed:Wait()
-	tween(sc, 0.35, { Scale = 0.02 }, Enum.EasingStyle.Back, Enum.EasingDirection.In).Completed:Wait()
-	startGui:Destroy()
-end
+	-- ===== FECHAR (desliga tudo e apaga o painel) =====
+	closeBtn.face.Activated:Connect(function()
+		pcall(function() if helpOn then stopHelp() end end)
+		pcall(stopSpectate)
+		for _, setState in pairs(toggles) do pcall(setState, false) end
+		pcall(function() if farmOn then farmEnable(false) end end)
+		alive = false
+		pcall(closeProfile)
+		saveJson(PLAYTIME_FILE, playTime)
+		for key, c in pairs(conns) do
+			pcall(function() c:Disconnect() end)
+			conns[key] = nil
+		end
+		for _, c in ipairs(uiConns) do pcall(function() c:Disconnect() end) end
+		gui:Destroy()
+		popGui:Destroy()
+	end)
 
--- ===== INICIA =====
--- dark: o botão aparece direto, com uma animação.
--- romântica: botão do coração, depois a intro do beijo, depois o coração do menu.
-local function showBubble()
+	end
+
+	-- ===== INICIA =====
+	showPage("behavior")
 	bubble.Visible = true
 	bubbleScale.Scale = 0.01
 	tween(bubbleScale, 0.5, { Scale = 1 }, Enum.EasingStyle.Back)
 end
 
-if IS_ROMANTIC then
-	task.spawn(function()
-		showStartButton() -- espera o clique no coração
-		playIntro(showBubble)
-	end)
-else
-	showBubble()
-end
+main()
