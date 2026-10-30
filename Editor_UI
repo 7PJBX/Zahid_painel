@@ -693,4 +693,366 @@ addModeButton("fixar", 4)
 local restoreBtn = new3D(panel, "restaurar", UDim2.new(1, 0, 0, 36), C.faceOff, C.baseOff)
 restoreBtn.holder.LayoutOrder = 5
 
-local targetBtn = new3D(panel, "alvo: item", UDim2.new(1
+local targetBtn = new3D(panel, "alvo: item", UDim2.new(1, 0, 0, 36), C.faceOff, C.baseOff)
+targetBtn.holder.LayoutOrder = 6
+
+local hint = Instance.new("TextLabel")
+hint.BackgroundTransparency = 1
+hint.Font = FONT
+hint.TextSize = 12
+hint.TextColor3 = C.textDim
+hint.TextWrapped = true
+hint.TextXAlignment = Enum.TextXAlignment.Left
+hint.TextYAlignment = Enum.TextYAlignment.Top
+hint.Text = HINTS.none
+hint.Size = UDim2.new(1, 0, 0, 46)
+hint.LayoutOrder = 7
+hint.Parent = panel
+
+-- barra do modo "editar": largura, altura, tudo e ok
+local editBar = Instance.new("Frame")
+editBar.BackgroundTransparency = 1
+editBar.Size = UDim2.new(1, 0, 0, 4 * 35)
+editBar.LayoutOrder = 8
+editBar.Visible = false
+editBar.Parent = panel
+
+local function editBtn(text, col, row, step)
+	local b = new3D(editBar, text, UDim2.new(0.5, -3, 0, 32), C.faceOff, C.baseOff)
+	b.holder.Position = UDim2.new(col * 0.5, col * 3, 0, row * 35)
+	holdRepeat(b, step)
+end
+editBtn("largura -", 0, 0, function(k) resizeSelected(-2 * k, 0) end)
+editBtn("largura +", 1, 0, function(k) resizeSelected(2 * k, 0) end)
+editBtn("altura -", 0, 1, function(k) resizeSelected(0, -2 * k) end)
+editBtn("altura +", 1, 1, function(k) resizeSelected(0, 2 * k) end)
+editBtn("menor", 0, 2, function(k) resizeSelected(-selW * 0.02 * k, -selH * 0.02 * k) end)
+editBtn("maior", 1, 2, function(k) resizeSelected(selW * 0.02 * k, selH * 0.02 * k) end)
+
+local okBtn = new3D(editBar, "ok", UDim2.new(1, 0, 0, 32), C.faceOff, C.baseOff)
+okBtn.holder.Position = UDim2.fromOffset(0, 3 * 35)
+
+local function setMode(newMode)
+	if mode == newMode then newMode = nil end
+	mode = newMode
+	for name, b in pairs(modeButtons) do
+		b.setOn(name == mode)
+	end
+	capture.Visible = mode ~= nil
+	selectObj(nil)
+	editBar.Visible = mode == "editar"
+	hint.Text = HINTS[mode or "none"]
+end
+
+okBtn.face.Activated:Connect(function()
+	selectObj(nil)
+end)
+
+for name, b in pairs(modeButtons) do
+	b.face.Activated:Connect(function()
+		setMode(name)
+	end)
+end
+
+targetBtn.face.Activated:Connect(function()
+	targetLevel = targetLevel % 3 + 1
+	targetBtn.face.Text = "alvo: " .. LEVEL_NAMES[targetLevel]
+end)
+
+-- ===== RESTAURAR (lista do que foi editado) =====
+local popup = Instance.new("Frame")
+popup.AnchorPoint = Vector2.new(0.5, 0.5)
+popup.Position = UDim2.fromScale(0.5, 0.5)
+popup.Size = UDim2.fromOffset(280, 330)
+popup.BackgroundColor3 = Color3.new(1, 1, 1)
+popup.ZIndex = 8
+popup.Active = true
+popup.Visible = false
+popup.Parent = gui
+Instance.new("UICorner", popup).CornerRadius = UDim.new(0, 14)
+do
+	local g = Instance.new("UIGradient")
+	g.Color = ColorSequence.new(C.panelTop, C.panelBottom)
+	g.Rotation = 90
+	g.Parent = popup
+end
+
+local popTitle = Instance.new("TextLabel")
+popTitle.BackgroundTransparency = 1
+popTitle.Font = FONT
+popTitle.TextSize = 16
+popTitle.TextColor3 = C.text
+popTitle.TextXAlignment = Enum.TextXAlignment.Left
+popTitle.Text = "Restaurar"
+popTitle.Position = UDim2.fromOffset(12, 8)
+popTitle.Size = UDim2.new(1, -24, 0, 24)
+popTitle.Parent = popup
+
+local restoreList = Instance.new("ScrollingFrame")
+restoreList.BackgroundTransparency = 1
+restoreList.BorderSizePixel = 0
+restoreList.Position = UDim2.fromOffset(10, 38)
+restoreList.Size = UDim2.new(1, -20, 1, -38 - 48)
+restoreList.ScrollBarThickness = 4
+restoreList.AutomaticCanvasSize = Enum.AutomaticSize.Y
+restoreList.CanvasSize = UDim2.new()
+restoreList.Parent = popup
+local restoreLayout = Instance.new("UIListLayout")
+restoreLayout.Padding = UDim.new(0, 5)
+restoreLayout.SortOrder = Enum.SortOrder.LayoutOrder
+restoreLayout.Parent = restoreList
+
+local restoreAllBtn = new3D(popup, "restaurar tudo", UDim2.new(0.6, -8, 0, 36), C.faceOff, C.baseOff)
+restoreAllBtn.holder.AnchorPoint = Vector2.new(0, 1)
+restoreAllBtn.holder.Position = UDim2.new(0, 10, 1, -8)
+local popCloseBtn = new3D(popup, "fechar", UDim2.new(0.4, -12, 0, 36), C.faceOff, C.baseOff)
+popCloseBtn.holder.AnchorPoint = Vector2.new(1, 1)
+popCloseBtn.holder.Position = UDim2.new(1, -10, 1, -8)
+
+-- texto de cada item da lista
+local function entryInfo(key, rec)
+	local segs = string.split(key, "|")
+	local last = segs[#segs] or key
+	local class, name = string.match(last, "^([^:]+):(.*)#%d+$")
+	local label = (name or last) .. " (" .. (class or "?") .. ")"
+	local flags = {}
+	if rec.deleted then table.insert(flags, "excluído") end
+	if rec.size then table.insert(flags, "tamanho") end
+	if rec.locked then table.insert(flags, "fixado") end
+	local text = table.concat(flags, ", ")
+	if resolve(key) == nil then text = text .. " - fora da tela" end
+	return label, text
+end
+
+local function rebuildRestoreList()
+	for _, c in ipairs(restoreList:GetChildren()) do
+		if c:IsA("Frame") or c:IsA("TextLabel") then c:Destroy() end
+	end
+	local keys = {}
+	for key in pairs(saved) do table.insert(keys, key) end
+	table.sort(keys)
+
+	if #keys == 0 then
+		local empty = Instance.new("TextLabel")
+		empty.BackgroundTransparency = 1
+		empty.Font = FONT
+		empty.TextSize = 13
+		empty.TextColor3 = C.textDim
+		empty.Text = "Nada para restaurar."
+		empty.Size = UDim2.new(1, 0, 0, 30)
+		empty.Parent = restoreList
+		return
+	end
+
+	for i, key in ipairs(keys) do
+		local label, flags = entryInfo(key, saved[key])
+
+		local row = Instance.new("Frame")
+		row.BackgroundColor3 = C.row
+		row.BorderSizePixel = 0
+		row.Size = UDim2.new(1, 0, 0, 48)
+		row.LayoutOrder = i
+		row.Parent = restoreList
+		Instance.new("UICorner", row).CornerRadius = UDim.new(0, 8)
+
+		local nameLabel = Instance.new("TextLabel")
+		nameLabel.BackgroundTransparency = 1
+		nameLabel.Font = FONT
+		nameLabel.TextSize = 13
+		nameLabel.TextColor3 = C.text
+		nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+		nameLabel.TextTruncate = Enum.TextTruncate.AtEnd
+		nameLabel.Text = label
+		nameLabel.Position = UDim2.fromOffset(8, 5)
+		nameLabel.Size = UDim2.new(1, -108, 0, 20)
+		nameLabel.Parent = row
+
+		local flagLabel = Instance.new("TextLabel")
+		flagLabel.BackgroundTransparency = 1
+		flagLabel.Font = FONT
+		flagLabel.TextSize = 11
+		flagLabel.TextColor3 = C.textDim
+		flagLabel.TextXAlignment = Enum.TextXAlignment.Left
+		flagLabel.TextTruncate = Enum.TextTruncate.AtEnd
+		flagLabel.Text = flags
+		flagLabel.Position = UDim2.fromOffset(8, 26)
+		flagLabel.Size = UDim2.new(1, -108, 0, 16)
+		flagLabel.Parent = row
+
+		local b = new3D(row, "restaurar", UDim2.fromOffset(88, 34), C.faceOff, C.baseOff)
+		b.face.TextSize = 12
+		b.holder.AnchorPoint = Vector2.new(1, 0.5)
+		b.holder.Position = UDim2.new(1, -6, 0.5, 0)
+		b.face.Activated:Connect(function()
+			restoreKey(key)
+			rebuildRestoreList()
+			toast("Restaurado: " .. label)
+		end)
+	end
+end
+
+local function openRestore()
+	rebuildRestoreList()
+	popup.Visible = true
+end
+
+restoreBtn.face.Activated:Connect(openRestore)
+popCloseBtn.face.Activated:Connect(function()
+	popup.Visible = false
+end)
+restoreAllBtn.face.Activated:Connect(function()
+	local keys = {}
+	for key in pairs(saved) do table.insert(keys, key) end
+	for _, key in ipairs(keys) do restoreKey(key) end
+	rebuildRestoreList()
+	toast("Tudo restaurado.")
+end)
+
+-- ===== ENGRENAGEM (abre o menu; não passa da borda; volta com efeito mola) =====
+local gear = Instance.new("TextButton")
+gear.Size = UDim2.fromOffset(38, 38)
+gear.Position = UDim2.fromOffset(0, 0) -- centralizada no início (veja o bloco INÍCIO)
+gear.BackgroundColor3 = C.gear
+gear.AutoButtonColor = false
+gear.Font = Enum.Font.GothamMedium
+gear.Text = "⚙️"
+gear.TextScaled = true
+gear.ZIndex = 6
+gear.Parent = gui
+Instance.new("UICorner", gear).CornerRadius = UDim.new(1, 0)
+local gearPad = Instance.new("UIPadding")
+gearPad.PaddingTop = UDim.new(0, 7)
+gearPad.PaddingBottom = UDim.new(0, 7)
+gearPad.PaddingLeft = UDim.new(0, 7)
+gearPad.PaddingRight = UDim.new(0, 7)
+gearPad.Parent = gear
+
+-- limita uma posição aos limites da tela
+local function boundsFor(x, y)
+	local s = gui.AbsoluteSize
+	local w, h = gear.AbsoluteSize.X, gear.AbsoluteSize.Y
+	return math.clamp(x, 0, math.max(0, s.X - w)), math.clamp(y, 0, math.max(0, s.Y - h))
+end
+
+-- se estiver fora da borda, puxa de volta com efeito mola
+local function springIntoBounds()
+	local px, py = gear.Position.X.Offset, gear.Position.Y.Offset
+	local cx, cy = boundsFor(px, py)
+	if cx ~= px or cy ~= py then
+		tween(gear, 0.6, { Position = UDim2.fromOffset(cx, cy) }, Enum.EasingStyle.Elastic, Enum.EasingDirection.Out)
+	end
+end
+
+local panelOpen = false
+
+local function placePanel()
+	local s = gui.AbsoluteSize
+	local gp, gs = gear.AbsolutePosition, gear.AbsoluteSize
+	local pw = PANEL_W
+	local ph = panelList.AbsoluteContentSize.Y + 16
+	local x = math.clamp(gp.X, 8, math.max(8, s.X - pw - 8))
+	local y = gp.Y + gs.Y + 6
+	if y + ph > s.Y - 8 then
+		y = math.max(8, gp.Y - ph - 6)
+	end
+	panel.Position = UDim2.fromOffset(x, y)
+end
+
+-- o painel acompanha a engrenagem (inclusive durante a mola)
+keep(RunService.RenderStepped:Connect(function()
+	if panelOpen then placePanel() end
+end))
+
+local function openPanel()
+	panelOpen = true
+	panel.Visible = true
+	placePanel()
+	panelScale.Scale = 0.85
+	tween(panelScale, 0.25, { Scale = 1 }, Enum.EasingStyle.Back)
+	-- toda vez que abre: reaplica as exclusões e edições salvas nos frames que estão na tela
+	local n = applySaved()
+	if n > 0 then toast("Edições aplicadas: " .. n) end
+end
+
+local function closePanel()
+	panelOpen = false
+	setMode(nil)
+	popup.Visible = false
+	local t = tween(panelScale, 0.15, { Scale = 0.85 }, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+	t.Completed:Connect(function()
+		if not panelOpen then panel.Visible = false end
+	end)
+end
+
+closeBtn.face.Activated:Connect(closePanel)
+
+local dragging, moved = false, false
+local dragInput, dragStart, startPos = nil, nil, nil
+
+gear.InputBegan:Connect(function(input)
+	if isPress(input) then
+		dragging, moved = true, false
+		dragInput = input
+		dragStart = Vector2.new(input.Position.X, input.Position.Y)
+		startPos = Vector2.new(gear.Position.X.Offset, gear.Position.Y.Offset)
+	end
+end)
+
+keep(UIS.InputChanged:Connect(function(input)
+	if not dragging then return end
+	if input.UserInputType ~= Enum.UserInputType.MouseMovement and input ~= dragInput then return end
+	local d = Vector2.new(input.Position.X, input.Position.Y) - dragStart
+	if d.Magnitude > 6 then moved = true end
+	if not moved then return end
+	local raw = startPos + d
+	local cx, cy = boundsFor(raw.X, raw.Y)
+	-- passou da borda: anda só uma parte (resistência de elástico)
+	local ox = math.clamp((raw.X - cx) * 0.35, -60, 60)
+	local oy = math.clamp((raw.Y - cy) * 0.35, -60, 60)
+	gear.Position = UDim2.fromOffset(cx + ox, cy + oy)
+end))
+
+keep(UIS.InputEnded:Connect(function(input)
+	if not dragging or not isPress(input) then return end
+	dragging = false
+	if moved then
+		springIntoBounds() -- soltou fora da borda: volta com efeito mola
+	else
+		if panelOpen then closePanel() else openPanel() end
+	end
+end))
+
+-- se o tamanho da tela mudar (ex.: girar o celular), a engrenagem volta para dentro
+keep(gui:GetPropertyChangedSignal("AbsoluteSize"):Connect(springIntoBounds))
+
+-- ===== SCRIPTS QUE RECRIAM A INTERFACE =====
+local reapplyQueued = false
+keep(playerGui.DescendantAdded:Connect(function(d)
+	if reapplyQueued or not next(saved) then return end
+	if d == gui or d:IsDescendantOf(gui) then return end
+	reapplyQueued = true
+	task.delay(0.5, function()
+		reapplyQueued = false
+		applySaved()
+	end)
+end))
+
+-- ===== LIMPEZA (se o script rodar de novo) =====
+shared.__EditorUI_cleanup = function()
+	for _, c in ipairs(conns) do
+		pcall(function() c:Disconnect() end)
+	end
+	local list = {}
+	for obj in pairs(tracked) do table.insert(list, obj) end
+	for _, obj in ipairs(list) do untrack(obj) end
+	gui:Destroy()
+end
+
+-- ===== INÍCIO =====
+task.defer(function()
+	task.wait()
+	local sz = gui.AbsoluteSize
+	gear.Position = UDim2.fromOffset((sz.X - gear.AbsoluteSize.X) / 2, (sz.Y - gear.AbsoluteSize.Y) / 2)
+	springIntoBounds()
+	applySaved() -- aplica de cara o que já foi salvo
+end)
