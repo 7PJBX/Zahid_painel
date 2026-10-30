@@ -1,0 +1,696 @@
+-- ===== EDITOR UI =====
+-- Edita a interface de OUTROS scripts que ficam na tela (só no seu lado):
+--   fechar    : enquanto ligado, tocar num frame o exclui (esconde). Dá para desfazer.
+--   editar    : toque num frame e mude o tamanho (segure os botões de largura, altura, menor e maior).
+--   fixar     : tocar num frame trava a posição dele (impossível mover); tocar de novo solta.
+--   restaurar : lista tudo que foi excluído, editado ou fixado e devolve ao original.
+--   alvo      : escolhe o que o toque pega: "item" (o que está sob o dedo), "grupo" (o pai dele)
+--               ou "raiz" (o frame principal do script).
+-- As edições ficam salvas em um arquivo e são aplicadas de novo toda vez que o menu abre
+-- (e também quando o script dono do frame volta a criá-lo).
+-- A engrenagem abre o menu. Ela não passa da borda da tela: se for arrastada para fora,
+-- é puxada de volta com efeito mola.
+
+local Players = game:GetService("Players")
+local UIS = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local HttpService = game:GetService("HttpService")
+local GuiService = game:GetService("GuiService")
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+-- se já estiver rodando, limpa a cópia antiga antes de começar
+if shared.__EditorUI_cleanup then
+	pcall(shared.__EditorUI_cleanup)
+end
+local oldGui = playerGui:FindFirstChild("EditorUI")
+if oldGui then oldGui:Destroy() end
+
+local conns = {}
+local function keep(c)
+	table.insert(conns, c)
+	return c
+end
+
+-- ===== CONFIGURAÇÕES =====
+local FILE = "EditorUI_edicoes.json"
+local canFile = type(writefile) == "function" and type(readfile) == "function" and type(isfile) == "function"
+local MIN_SIZE = 16 -- menor tamanho (px) que um frame pode ter no "editar"
+local FONT = Enum.Font.GothamMedium
+local DEPTH = 3     -- espessura do corpo dos botões 3D
+
+local C = {
+	panelTop = Color3.fromRGB(12, 12, 15),
+	panelBottom = Color3.fromRGB(24, 24, 29),
+	text = Color3.fromRGB(225, 225, 232),
+	textDim = Color3.fromRGB(150, 150, 160),
+	textOn = Color3.fromRGB(22, 22, 26),
+	faceOff = Color3.fromRGB(52, 52, 60),
+	baseOff = Color3.fromRGB(26, 26, 31),
+	faceOn = Color3.fromRGB(205, 205, 212),
+	baseOn = Color3.fromRGB(120, 120, 130),
+	red = Color3.fromRGB(255, 90, 90),
+	blue = Color3.fromRGB(90, 160, 255),
+	amber = Color3.fromRGB(255, 190, 70),
+	green = Color3.fromRGB(90, 210, 130),
+	gear = Color3.fromRGB(18, 18, 22),
+	row = Color3.fromRGB(30, 30, 36),
+}
+
+-- ===== DADOS (edições salvas) =====
+local function udimToTable(u)
+	return { xs = u.X.Scale, xo = u.X.Offset, ys = u.Y.Scale, yo = u.Y.Offset }
+end
+
+local function tableToUdim(t)
+	return UDim2.new(t.xs, t.xo, t.ys, t.yo)
+end
+
+-- saved[chave] = { orig = { visible, size }, deleted, size, locked, pos }
+local saved = {}
+local persistQueued = false
+
+local function persistNow()
+	persistQueued = false
+	if not canFile then return end
+	pcall(function()
+		writefile(FILE, HttpService:JSONEncode({ version = 1, items = saved }))
+	end)
+end
+
+-- junta várias mudanças seguidas num único salvamento
+local function persist()
+	if persistQueued then return end
+	persistQueued = true
+	task.delay(0.4, persistNow)
+end
+
+if canFile then
+	local ok, data = pcall(function()
+		if not isfile(FILE) then return nil end
+		return HttpService:JSONDecode(readfile(FILE))
+	end)
+	if ok and type(data) == "table" and type(data.items) == "table" then
+		for key, rec in pairs(data.items) do
+			if type(key) == "string" and type(rec) == "table" then
+				saved[key] = rec
+			end
+		end
+	end
+end
+
+-- chave estável de um objeto: caminho de "Classe:Nome#posição entre iguais" a partir do PlayerGui
+local function keyOf(obj)
+	local parts = {}
+	local cur = obj
+	while cur and cur ~= playerGui do
+		local idx, n = 1, 0
+		local parent = cur.Parent
+		if parent then
+			for _, sib in ipairs(parent:GetChildren()) do
+				if sib.Name == cur.Name and sib.ClassName == cur.ClassName then
+					n += 1
+					if sib == cur then idx = n end
+				end
+			end
+		end
+		table.insert(parts, 1, cur.ClassName .. ":" .. cur.Name .. "#" .. idx)
+		cur = parent
+	end
+	return table.concat(parts, "|")
+end
+
+-- acha de novo o objeto a partir da chave (nil se não estiver na tela)
+local function resolve(key)
+	local cur = playerGui
+	for seg in string.gmatch(key, "[^|]+") do
+		local class, name, idx = string.match(seg, "^([^:]+):(.*)#(%d+)$")
+		if not class then return nil end
+		idx = tonumber(idx)
+		local n, found = 0, nil
+		for _, child in ipairs(cur:GetChildren()) do
+			if child.Name == name and child.ClassName == class then
+				n += 1
+				if n == idx then
+					found = child
+					break
+				end
+			end
+		end
+		if not found then return nil end
+		cur = found
+	end
+	if cur == playerGui then return nil end
+	return cur
+end
+
+-- objetos que estou vigiando: se o script dono mexer, eu desfaço
+local tracked = {} -- [obj] = { key, conns, applying }
+
+local function enforce(obj)
+	local t = tracked[obj]
+	local rec = t and saved[t.key]
+	if not rec then return end
+	t.applying = true
+	if rec.deleted and obj.Visible then
+		obj.Visible = false
+	end
+	if rec.size then
+		local s = tableToUdim(rec.size)
+		if obj.Size ~= s then obj.Size = s end
+	end
+	if rec.locked and rec.pos then
+		local p = tableToUdim(rec.pos)
+		if obj.Position ~= p then obj.Position = p end
+	end
+	t.applying = false
+end
+
+local function untrack(obj)
+	local t = tracked[obj]
+	if not t then return end
+	for _, c in ipairs(t.conns) do c:Disconnect() end
+	tracked[obj] = nil
+end
+
+local function track(obj, key)
+	local t = tracked[obj]
+	if t then
+		t.key = key
+	else
+		t = { key = key, conns = {}, applying = false }
+		tracked[obj] = t
+		for _, prop in ipairs({ "Visible", "Size", "Position" }) do
+			table.insert(t.conns, obj:GetPropertyChangedSignal(prop):Connect(function()
+				if not t.applying then enforce(obj) end
+			end))
+		end
+		table.insert(t.conns, obj.Destroying:Connect(function()
+			untrack(obj)
+		end))
+	end
+	enforce(obj)
+end
+
+-- cria (ou pega) o registro do objeto, guardando como ele era antes da primeira edição
+local function ensureRec(obj)
+	local key = keyOf(obj)
+	local rec = saved[key]
+	if not rec then
+		rec = { orig = { visible = obj.Visible, size = udimToTable(obj.Size) } }
+		saved[key] = rec
+	end
+	return key, rec
+end
+
+local function pruneIfEmpty(key, obj)
+	local rec = saved[key]
+	if rec and not rec.deleted and not rec.size and not rec.locked then
+		saved[key] = nil
+		if obj then untrack(obj) end
+	end
+end
+
+local function deleteObj(obj)
+	local key, rec = ensureRec(obj)
+	rec.deleted = true
+	track(obj, key)
+	persist()
+	return key
+end
+
+local function resizeTo(obj, w, h)
+	local key, rec = ensureRec(obj)
+	rec.size = udimToTable(UDim2.fromOffset(w, h))
+	track(obj, key)
+	persist()
+end
+
+-- fixa ou solta a posição; devolve true se ficou fixado
+local function toggleLock(obj)
+	local key, rec = ensureRec(obj)
+	if rec.locked then
+		rec.locked = nil
+		rec.pos = nil
+		pruneIfEmpty(key, obj)
+		persist()
+		return false
+	end
+	rec.locked = true
+	rec.pos = udimToTable(obj.Position)
+	track(obj, key)
+	persist()
+	return true
+end
+
+-- devolve o objeto ao original e apaga o registro
+local function restoreKey(key)
+	local rec = saved[key]
+	if not rec then return end
+	local obj = resolve(key)
+	if obj then
+		untrack(obj)
+		if rec.orig then
+			if rec.deleted then obj.Visible = rec.orig.visible ~= false end
+			if rec.size and rec.orig.size then obj.Size = tableToUdim(rec.orig.size) end
+		end
+	end
+	saved[key] = nil
+	persist()
+end
+
+-- reaplica tudo que foi salvo nos objetos que estão na tela; devolve quantos achou
+local function applySaved()
+	local n = 0
+	for key in pairs(saved) do
+		local obj = resolve(key)
+		if obj and obj:IsA("GuiObject") then
+			track(obj, key)
+			n += 1
+		end
+	end
+	return n
+end
+
+-- ===== INTERFACE =====
+local function tween(obj, time, props, style, dir)
+	local t = TweenService:Create(
+		obj,
+		TweenInfo.new(time, style or Enum.EasingStyle.Quad, dir or Enum.EasingDirection.Out),
+		props
+	)
+	t:Play()
+	return t
+end
+
+local function isPress(input)
+	return input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch
+end
+
+-- botão 3D: corpo escuro parado e face clara que desce ao apertar
+local pressedFaces = {}
+keep(UIS.InputEnded:Connect(function(input)
+	if not isPress(input) then return end
+	for face in pairs(pressedFaces) do
+		pressedFaces[face] = nil
+		if face.Parent then
+			tween(face, 0.14, { Position = UDim2.fromOffset(0, 0) }, Enum.EasingStyle.Back)
+		end
+	end
+end))
+
+local function new3D(parent, text, size, faceColor, baseColor)
+	local holder = Instance.new("Frame")
+	holder.BackgroundTransparency = 1
+	holder.BorderSizePixel = 0
+	holder.Size = size
+	holder.Parent = parent
+
+	local faceH = size.Y.Offset - DEPTH
+
+	local base = Instance.new("Frame")
+	base.Size = UDim2.new(1, 0, 0, faceH)
+	base.Position = UDim2.fromOffset(0, DEPTH)
+	base.BackgroundColor3 = baseColor
+	base.BorderSizePixel = 0
+	base.Parent = holder
+	Instance.new("UICorner", base).CornerRadius = UDim.new(0, 8)
+
+	local face = Instance.new("TextButton")
+	face.Size = UDim2.new(1, 0, 0, faceH)
+	face.BackgroundColor3 = faceColor
+	face.BorderSizePixel = 0
+	face.AutoButtonColor = false
+	face.Font = FONT
+	face.TextColor3 = C.text
+	face.TextSize = 14
+	face.TextTruncate = Enum.TextTruncate.AtEnd
+	face.Text = text
+	face.Parent = holder
+	Instance.new("UICorner", face).CornerRadius = UDim.new(0, 8)
+
+	face.InputBegan:Connect(function(input)
+		if isPress(input) then
+			pressedFaces[face] = true
+			tween(face, 0.06, { Position = UDim2.fromOffset(0, DEPTH) })
+		end
+	end)
+
+	local obj = { holder = holder, base = base, face = face }
+
+	function obj.setOn(on)
+		tween(face, 0.18, {
+			BackgroundColor3 = on and C.faceOn or faceColor,
+			TextColor3 = on and C.textOn or C.text,
+		})
+		tween(base, 0.18, { BackgroundColor3 = on and C.baseOn or baseColor })
+	end
+
+	return obj
+end
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "EditorUI"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true -- o espaço da minha tela é a tela de verdade
+gui.DisplayOrder = 1000
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.Parent = playerGui
+
+-- posição real de um objeto qualquer na tela (cada ScreenGui pode tratar a barra do topo de um jeito)
+local inset = GuiService:GetGuiInset()
+local convA = false -- true: AbsolutePosition já é a posição real na tela
+task.spawn(function()
+	local probeGui = Instance.new("ScreenGui")
+	probeGui.Name = "EditorUI_probe"
+	probeGui.IgnoreGuiInset = false
+	probeGui.ResetOnSpawn = false
+	probeGui.Parent = playerGui
+	local probe = Instance.new("Frame")
+	probe.Size = UDim2.fromOffset(1, 1)
+	probe.BackgroundTransparency = 1
+	probe.Parent = probeGui
+	RunService.RenderStepped:Wait()
+	RunService.RenderStepped:Wait()
+	convA = inset.Y > 0 and math.abs(probe.AbsolutePosition.Y - inset.Y) < 1
+	probeGui:Destroy()
+end)
+
+local function screenPos(obj)
+	local abs = obj.AbsolutePosition
+	if convA then return abs end
+	local sg = obj:FindFirstAncestorWhichIsA("ScreenGui")
+	if sg and sg.IgnoreGuiInset then return abs end
+	return abs + inset
+end
+
+-- caixa que destaca o objeto selecionado
+local selBox = Instance.new("Frame")
+selBox.BackgroundTransparency = 0.85
+selBox.BackgroundColor3 = C.blue
+selBox.BorderSizePixel = 0
+selBox.ZIndex = 3
+selBox.Visible = false
+selBox.Parent = gui
+local selStroke = Instance.new("UIStroke")
+selStroke.Thickness = 3
+selStroke.Color = C.blue
+selStroke.Parent = selBox
+
+local boxTarget = nil
+local function showBox(obj, color)
+	boxTarget = obj
+	selBox.BackgroundColor3 = color
+	selStroke.Color = color
+end
+local function hideBox()
+	boxTarget = nil
+	selBox.Visible = false
+end
+
+keep(RunService.RenderStepped:Connect(function()
+	local o = boxTarget
+	if o and o.Parent and o:IsDescendantOf(playerGui) then
+		local p, s = screenPos(o), o.AbsoluteSize
+		selBox.Position = UDim2.fromOffset(p.X, p.Y)
+		selBox.Size = UDim2.fromOffset(s.X, s.Y)
+		selBox.Visible = true
+	else
+		selBox.Visible = false
+	end
+end))
+
+-- camada que pega os toques enquanto um modo está ligado (assim o toque não aciona o botão de baixo)
+local capture = Instance.new("TextButton")
+capture.Size = UDim2.fromScale(1, 1)
+capture.BackgroundTransparency = 1
+capture.Text = ""
+capture.AutoButtonColor = false
+capture.Active = true
+capture.ZIndex = 1
+capture.Visible = false
+capture.Parent = gui
+
+-- aviso rápido embaixo, com botão opcional (ex.: desfazer)
+local toastFrame = Instance.new("Frame")
+toastFrame.AnchorPoint = Vector2.new(0.5, 1)
+toastFrame.Position = UDim2.new(0.5, 0, 1, -24)
+toastFrame.Size = UDim2.fromOffset(310, 42)
+toastFrame.BackgroundColor3 = C.gear
+toastFrame.ZIndex = 9
+toastFrame.Visible = false
+toastFrame.Parent = gui
+Instance.new("UICorner", toastFrame).CornerRadius = UDim.new(0, 10)
+
+local toastLabel = Instance.new("TextLabel")
+toastLabel.BackgroundTransparency = 1
+toastLabel.Font = FONT
+toastLabel.TextSize = 13
+toastLabel.TextColor3 = C.text
+toastLabel.TextXAlignment = Enum.TextXAlignment.Left
+toastLabel.TextTruncate = Enum.TextTruncate.AtEnd
+toastLabel.Position = UDim2.fromOffset(12, 0)
+toastLabel.Size = UDim2.new(1, -24, 1, 0)
+toastLabel.Parent = toastFrame
+
+local toastBtn = new3D(toastFrame, "desfazer", UDim2.fromOffset(86, 32), C.faceOff, C.baseOff)
+toastBtn.holder.AnchorPoint = Vector2.new(1, 0.5)
+toastBtn.holder.Position = UDim2.new(1, -6, 0.5, 0)
+toastBtn.holder.Visible = false
+
+local toastToken = 0
+local toastAction = nil
+
+toastBtn.face.Activated:Connect(function()
+	local fn = toastAction
+	toastAction = nil
+	toastFrame.Visible = false
+	if fn then fn() end
+end)
+
+local function toast(text, actionText, actionFn)
+	toastToken += 1
+	local my = toastToken
+	toastLabel.Text = text
+	toastLabel.Size = actionText and UDim2.new(1, -110, 1, 0) or UDim2.new(1, -24, 1, 0)
+	toastBtn.holder.Visible = actionText ~= nil
+	if actionText then toastBtn.face.Text = actionText end
+	toastAction = actionFn
+	toastFrame.Visible = true
+	task.delay(4, function()
+		if toastToken == my then toastFrame.Visible = false end
+	end)
+end
+
+-- ===== ESTADO DO EDITOR =====
+local mode = nil -- "fechar" | "editar" | "fixar" | nil
+local targetLevel = 1 -- 1 item, 2 grupo, 3 raiz
+local LEVEL_NAMES = { "item", "grupo", "raiz" }
+local selected, selW, selH = nil, 0, 0
+
+local HINTS = {
+	none = "Escolha uma ação: fechar, editar ou fixar.",
+	fechar = "Toque num frame para excluir. Dá para desfazer ou restaurar depois.",
+	editar = "Toque num frame e segure os botões para mudar o tamanho.",
+	fixar = "Toque num frame para fixar a posição. Toque de novo para soltar.",
+}
+
+-- o objeto tem algo visível? (para não pegar frames invisíveis que só agrupam)
+local function hasContent(o)
+	if o:IsA("TextLabel") or o:IsA("TextButton") or o:IsA("TextBox") then
+		return o.BackgroundTransparency < 1 or o.Text ~= ""
+	end
+	if o:IsA("ImageLabel") or o:IsA("ImageButton") then
+		return o.BackgroundTransparency < 1 or (o.Image ~= "" and o.ImageTransparency < 1)
+	end
+	if o:IsA("Frame") or o:IsA("ScrollingFrame") then
+		return o.BackgroundTransparency < 1
+	end
+	return true
+end
+
+-- qual frame está sob o dedo (respeitando o "alvo")
+local function pickAt(pos)
+	local list = playerGui:GetGuiObjectsAtPosition(pos.X, pos.Y)
+	local first, best
+	for _, o in ipairs(list) do
+		if not o:IsDescendantOf(gui) and o.Visible then
+			first = first or o
+			if hasContent(o) then
+				best = o
+				break
+			end
+		end
+	end
+	local obj = best or first
+	if not obj then return nil end
+	if targetLevel == 2 then
+		if obj.Parent and obj.Parent:IsA("GuiObject") then obj = obj.Parent end
+	elseif targetLevel == 3 then
+		while obj.Parent and obj.Parent:IsA("GuiObject") do obj = obj.Parent end
+	end
+	return obj
+end
+
+local function selectObj(o)
+	selected = o
+	if o then
+		selW, selH = o.AbsoluteSize.X, o.AbsoluteSize.Y
+		showBox(o, C.blue)
+	else
+		hideBox()
+	end
+end
+
+local function resizeSelected(dw, dh)
+	local o = selected
+	if not o or not o.Parent then return end
+	selW = math.max(MIN_SIZE, selW + dw)
+	selH = math.max(MIN_SIZE, selH + dh)
+	resizeTo(o, selW, selH)
+end
+
+-- botão que repete enquanto o dedo está nele (e para ao soltar em qualquer lugar)
+local holdStops = {}
+keep(UIS.InputEnded:Connect(function(input)
+	if not isPress(input) then return end
+	for _, stop in ipairs(holdStops) do stop() end
+	persist()
+end))
+
+local function holdRepeat(btn, step)
+	local token = 0
+	table.insert(holdStops, function() token += 1 end)
+	btn.face.InputBegan:Connect(function(input)
+		if not isPress(input) then return end
+		token += 1
+		local my = token
+		task.spawn(function()
+			local t0 = os.clock()
+			while token == my do
+				step((os.clock() - t0) > 0.8 and 3 or 1)
+				task.wait(0.03)
+			end
+		end)
+	end)
+end
+
+-- pisca a caixa de destaque no objeto
+local function flash(obj, color)
+	showBox(obj, color)
+	task.delay(0.28, function()
+		if boxTarget == obj and selected ~= obj then hideBox() end
+	end)
+end
+
+local function describe(obj)
+	return obj.Name .. " (" .. obj.ClassName .. ")"
+end
+
+local function handleTap(pos)
+	if not mode then return end
+	local obj = pickAt(pos)
+	if not obj then
+		toast("Nada encontrado aí.")
+		return
+	end
+	if mode == "fechar" then
+		flash(obj, C.red)
+		local key = deleteObj(obj)
+		toast("Excluído: " .. describe(obj), "desfazer", function()
+			restoreKey(key)
+		end)
+	elseif mode == "editar" then
+		selectObj(obj)
+		toast("Selecionado: " .. describe(obj))
+	elseif mode == "fixar" then
+		local locked = toggleLock(obj)
+		flash(obj, locked and C.amber or C.green)
+		toast((locked and "Fixado: " or "Solto: ") .. describe(obj))
+	end
+end
+
+-- toques na camada de captura
+local tapStart = nil
+capture.InputBegan:Connect(function(input)
+	if isPress(input) then
+		tapStart = Vector2.new(input.Position.X, input.Position.Y)
+	end
+end)
+capture.InputEnded:Connect(function(input)
+	if not tapStart or not isPress(input) then return end
+	local s = tapStart
+	tapStart = nil
+	local e = Vector2.new(input.Position.X, input.Position.Y)
+	if (e - s).Magnitude <= 12 then
+		handleTap(s) -- só toque parado conta (arrastar não faz nada)
+	end
+end)
+
+-- ===== PAINEL =====
+local PANEL_W = 214
+local panel = Instance.new("Frame")
+panel.Size = UDim2.fromOffset(PANEL_W, 0)
+panel.AutomaticSize = Enum.AutomaticSize.Y
+panel.BackgroundColor3 = Color3.new(1, 1, 1)
+panel.ZIndex = 5
+panel.Active = true
+panel.Visible = false
+panel.Parent = gui
+Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 14)
+do
+	local g = Instance.new("UIGradient")
+	g.Color = ColorSequence.new(C.panelTop, C.panelBottom)
+	g.Rotation = 90
+	g.Parent = panel
+end
+local panelPad = Instance.new("UIPadding")
+panelPad.PaddingTop = UDim.new(0, 8)
+panelPad.PaddingBottom = UDim.new(0, 8)
+panelPad.PaddingLeft = UDim.new(0, 8)
+panelPad.PaddingRight = UDim.new(0, 8)
+panelPad.Parent = panel
+local panelList = Instance.new("UIListLayout")
+panelList.Padding = UDim.new(0, 6)
+panelList.SortOrder = Enum.SortOrder.LayoutOrder
+panelList.Parent = panel
+local panelScale = Instance.new("UIScale")
+panelScale.Parent = panel
+
+local titleRow = Instance.new("Frame")
+titleRow.BackgroundTransparency = 1
+titleRow.Size = UDim2.new(1, 0, 0, 28)
+titleRow.LayoutOrder = 1
+titleRow.Parent = panel
+
+local titleLabel = Instance.new("TextLabel")
+titleLabel.BackgroundTransparency = 1
+titleLabel.Font = FONT
+titleLabel.TextSize = 16
+titleLabel.TextColor3 = C.text
+titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+titleLabel.Text = "Editor UI"
+titleLabel.Size = UDim2.new(1, -36, 1, 0)
+titleLabel.Parent = titleRow
+
+local closeBtn = new3D(titleRow, "x", UDim2.fromOffset(30, 28), C.faceOff, C.baseOff)
+closeBtn.holder.AnchorPoint = Vector2.new(1, 0)
+closeBtn.holder.Position = UDim2.new(1, 0, 0, 0)
+
+local modeButtons = {}
+local function addModeButton(name, order)
+	local b = new3D(panel, name, UDim2.new(1, 0, 0, 36), C.faceOff, C.baseOff)
+	b.holder.LayoutOrder = order
+	modeButtons[name] = b
+end
+addModeButton("fechar", 2)
+addModeButton("editar", 3)
+addModeButton("fixar", 4)
+
+local restoreBtn = new3D(panel, "restaurar", UDim2.new(1, 0, 0, 36), C.faceOff, C.baseOff)
+restoreBtn.holder.LayoutOrder = 5
+
+local targetBtn = new3D(panel, "alvo: item", UDim2.new(1
