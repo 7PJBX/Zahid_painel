@@ -1,7 +1,48 @@
--- ===== SERVER BROWSER =====
--- Abre um pop up com o ping do servidor atual e a lista de servidores do jogo (6 por aba).
--- X fecha. Filtros por ping e por quantidade de jogadores. "Entrar" teleporta para o servidor.
+-- ===== SERVER BROWSER (com diagnóstico) =====
+-- Se der algum erro, ele aparece numa caixa na tela (dá para copiar o texto e me mandar).
+print("[Server browser] iniciando")
 
+local function showError(msg)
+	warn("[Server browser] ERRO: " .. tostring(msg))
+	pcall(function()
+		local lp = game:GetService("Players").LocalPlayer
+		local g = Instance.new("ScreenGui")
+		g.Name = "ServerBrowserErro"
+		g.ResetOnSpawn = false
+		g.IgnoreGuiInset = true
+		g.DisplayOrder = 999
+		g.Parent = lp:WaitForChild("PlayerGui")
+		local f = Instance.new("Frame")
+		f.AnchorPoint = Vector2.new(0.5, 0.5)
+		f.Position = UDim2.fromScale(0.5, 0.5)
+		f.Size = UDim2.new(0.9, 0, 0, 200)
+		f.BackgroundColor3 = Color3.fromRGB(40, 16, 16)
+		f.Parent = g
+		Instance.new("UICorner", f).CornerRadius = UDim.new(0, 12)
+		local t = Instance.new("TextBox")
+		t.Size = UDim2.new(1, -16, 1, -48)
+		t.Position = UDim2.fromOffset(8, 8)
+		t.BackgroundTransparency = 1
+		t.TextColor3 = Color3.fromRGB(255, 200, 200)
+		t.TextSize = 12
+		t.Font = Enum.Font.Code
+		t.TextXAlignment = Enum.TextXAlignment.Left
+		t.TextYAlignment = Enum.TextYAlignment.Top
+		t.TextWrapped = true
+		t.ClearTextOnFocus = false
+		t.MultiLine = true
+		t.Text = "Erro no Server browser:\n" .. tostring(msg)
+		t.Parent = f
+		local x = Instance.new("TextButton")
+		x.Size = UDim2.fromOffset(80, 30)
+		x.Position = UDim2.new(1, -88, 1, -38)
+		x.Text = "fechar"
+		x.Parent = f
+		x.Activated:Connect(function() g:Destroy() end)
+	end)
+end
+
+local function run()
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local TeleportService = game:GetService("TeleportService")
@@ -115,6 +156,7 @@ win.BackgroundColor3 = C.bg
 win.Active = true
 win.Parent = gui
 corner(win, 14)
+print("[Server browser] pop up criado")
 local winScale = Instance.new("UIScale", win)
 winScale.Scale = 0.7
 TweenService:Create(winScale, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
@@ -279,3 +321,8 @@ task.spawn(function()
 end)
 
 fetch()
+
+end
+
+local ok, err = xpcall(run, function(e) return tostring(e) .. "\n" .. debug.traceback() end)
+if not ok then showError(err) end
