@@ -1,0 +1,281 @@
+-- ===== SERVER BROWSER =====
+-- Abre um pop up com o ping do servidor atual e a lista de servidores do jogo (6 por aba).
+-- X fecha. Filtros por ping e por quantidade de jogadores. "Entrar" teleporta para o servidor.
+
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local TeleportService = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
+local Stats = game:GetService("Stats")
+
+local lp = Players.LocalPlayer
+local pg = lp:WaitForChild("PlayerGui")
+
+local oldGui = pg:FindFirstChild("ServerBrowser")
+if oldGui then oldGui:Destroy() end
+
+local alive = true
+local PER_PAGE = 6
+
+-- ===== REDE =====
+local function httpGet(url)
+	local req = request or http_request or (syn and syn.request)
+	if req then
+		local ok, res = pcall(req, { Url = url, Method = "GET" })
+		if ok and type(res) == "table" and res.Body then return res.Body end
+	end
+	local ok, body = pcall(function() return game:HttpGet(url) end)
+	if ok then return body end
+	return nil
+end
+
+local function apiJson(url)
+	local function try(u)
+		local body = httpGet(u)
+		if not body then return nil end
+		local ok, d = pcall(function() return HttpService:JSONDecode(body) end)
+		if ok and type(d) == "table" and not d.errors then return d end
+		return nil
+	end
+	return try(url) or try((url:gsub("roblox%.com", "roproxy.com")))
+end
+
+local function currentPing()
+	local ok, v = pcall(function() return Stats.Network.ServerStatsItem["Data Ping"]:GetValue() end)
+	if ok and type(v) == "number" and v > 0 then return math.floor(v + 0.5) end
+	return math.floor(lp:GetNetworkPing() * 2000)
+end
+
+-- O Roblox não informa onde o servidor fica. Isto é só uma estimativa pela distância (ping).
+local function regionGuess(ms)
+	if ms < 60 then return "perto de você" end
+	if ms < 130 then return "distância média" end
+	return "longe de você"
+end
+
+-- ===== TELA =====
+local gui = Instance.new("ScreenGui")
+gui.Name = "ServerBrowser"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.DisplayOrder = 800
+gui.Parent = pg
+
+local C = {
+	bg = Color3.fromRGB(20, 20, 25),
+	row = Color3.fromRGB(32, 32, 38),
+	btn = Color3.fromRGB(52, 52, 60),
+	text = Color3.fromRGB(230, 230, 236),
+	dim = Color3.fromRGB(150, 150, 162),
+	join = Color3.fromRGB(44, 100, 108),
+}
+
+local function corner(o, r)
+	Instance.new("UICorner", o).CornerRadius = UDim.new(0, r or 8)
+end
+
+local function label(parent, text, size, pos, textSize, color, align)
+	local l = Instance.new("TextLabel")
+	l.BackgroundTransparency = 1
+	l.Size = size
+	l.Position = pos or UDim2.new()
+	l.Font = Enum.Font.GothamMedium
+	l.TextSize = textSize or 13
+	l.TextColor3 = color or C.text
+	l.TextXAlignment = align or Enum.TextXAlignment.Left
+	l.TextWrapped = true
+	l.Text = text
+	l.Parent = parent
+	return l
+end
+
+local function button(parent, text, size, pos, color)
+	local b = Instance.new("TextButton")
+	b.Size = size
+	b.Position = pos or UDim2.new()
+	b.BackgroundColor3 = color or C.btn
+	b.TextColor3 = C.text
+	b.Font = Enum.Font.GothamMedium
+	b.TextSize = 13
+	b.Text = text
+	b.AutoButtonColor = true
+	b.Parent = parent
+	corner(b, 8)
+	return b
+end
+
+local sx, sy = gui.AbsoluteSize.X, gui.AbsoluteSize.Y
+if sx == 0 then sx, sy = 640, 360 end
+
+local win = Instance.new("Frame")
+win.AnchorPoint = Vector2.new(0.5, 0.5)
+win.Position = UDim2.fromScale(0.5, 0.5)
+win.Size = UDim2.fromOffset(math.min(340, sx - 20), math.min(340, sy - 20))
+win.BackgroundColor3 = C.bg
+win.Active = true
+win.Parent = gui
+corner(win, 14)
+local winScale = Instance.new("UIScale", win)
+winScale.Scale = 0.7
+TweenService:Create(winScale, TweenInfo.new(0.25, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+
+label(win, "Server browser", UDim2.new(1, -60, 0, 28), UDim2.fromOffset(12, 4), 16, C.text)
+
+local xBtn = button(win, "X", UDim2.fromOffset(32, 28), UDim2.new(1, -40, 0, 5))
+xBtn.Activated:Connect(function()
+	alive = false
+	gui:Destroy()
+end)
+
+-- ping e localização do servidor atual
+local info = label(win, "", UDim2.new(1, -24, 0, 34), UDim2.fromOffset(12, 36), 12, C.text)
+
+-- filtros
+local PING_OPTS = { 0, 100, 200, 300 } -- 0 = qualquer
+local MIN_OPTS = { 0, 5, 10, 20 }
+local pingIdx, minIdx, page = 1, 1, 1
+
+local refreshBtn = button(win, "Atualizar", UDim2.new(0.3, -6, 0, 28), UDim2.new(0, 10, 0, 74), C.join)
+local pingBtn = button(win, "Ping: todos", UDim2.new(0.35, -6, 0, 28), UDim2.new(0.3, 2, 0, 74))
+local minBtn = button(win, "Jogadores: todos", UDim2.new(0.35, -6, 0, 28), UDim2.new(0.65, 2, 0, 74))
+pingBtn.TextSize, minBtn.TextSize = 12, 12
+
+-- lista (arrastável)
+local list = Instance.new("ScrollingFrame")
+list.BackgroundTransparency = 1
+list.BorderSizePixel = 0
+list.Position = UDim2.fromOffset(10, 108)
+list.Size = UDim2.new(1, -20, 1, -108 - 44)
+list.ScrollBarThickness = 4
+list.AutomaticCanvasSize = Enum.AutomaticSize.Y
+list.CanvasSize = UDim2.new()
+list.Parent = win
+local ll = Instance.new("UIListLayout", list)
+ll.Padding = UDim.new(0, 5)
+ll.SortOrder = Enum.SortOrder.LayoutOrder
+
+-- navegação
+local backBtn = button(win, "Voltar", UDim2.new(0.3, -6, 0, 30), UDim2.new(0, 10, 1, -38))
+local nextBtn = button(win, "Próxima", UDim2.new(0.3, -6, 0, 30), UDim2.new(0.7, -4, 1, -38))
+local pageLbl = label(win, "", UDim2.new(0.4, 0, 0, 30), UDim2.new(0.3, 0, 1, -38), 12, C.dim, Enum.TextXAlignment.Center)
+
+-- ===== SERVIDORES =====
+local all, busy = {}, false
+
+local function clearList()
+	for _, c in ipairs(list:GetChildren()) do
+		if c:IsA("Frame") or c:IsA("TextLabel") then c:Destroy() end
+	end
+end
+
+local function message(text)
+	clearList()
+	local l = label(list, text, UDim2.new(1, 0, 0, 40), nil, 13, C.dim, Enum.TextXAlignment.Center)
+	l.LayoutOrder = 1
+end
+
+local function render()
+	local minP, maxPing = MIN_OPTS[minIdx], PING_OPTS[pingIdx]
+	local view = {}
+	for _, s in ipairs(all) do
+		if s.id ~= game.JobId and type(s.playing) == "number" and s.playing >= minP
+			and (maxPing == 0 or (type(s.ping) == "number" and s.ping <= maxPing)) then
+			table.insert(view, s)
+		end
+	end
+	local total = math.max(1, math.ceil(#view / PER_PAGE))
+	page = math.clamp(page, 1, total)
+	pageLbl.Text = "Aba " .. page .. "/" .. total .. "  (" .. #view .. ")"
+
+	if #view == 0 then
+		message("Nenhum servidor com esses filtros.")
+		return
+	end
+	clearList()
+	for i = (page - 1) * PER_PAGE + 1, math.min(#view, page * PER_PAGE) do
+		local s = view[i]
+		local row = Instance.new("Frame")
+		row.Size = UDim2.new(1, 0, 0, 46)
+		row.BackgroundColor3 = C.row
+		row.BorderSizePixel = 0
+		row.LayoutOrder = i
+		row.Parent = list
+		corner(row, 8)
+		label(row, "Jogadores: " .. s.playing .. "/" .. (s.maxPlayers or "?"), UDim2.new(1, -84, 0, 20), UDim2.fromOffset(10, 4), 13, C.text)
+		label(row, "Ping: " .. (type(s.ping) == "number" and (s.ping .. " ms") or "?"), UDim2.new(1, -84, 0, 18), UDim2.fromOffset(10, 24), 12, C.dim)
+		local join = button(row, "Entrar", UDim2.fromOffset(66, 30), UDim2.new(1, -74, 0.5, -15), C.join)
+		join.Activated:Connect(function()
+			join.Text = "..."
+			local ok = pcall(function() TeleportService:TeleportToPlaceInstance(game.PlaceId, s.id, lp) end)
+			if not ok then
+				join.Text = "Falhou"
+				task.delay(1.5, function() if join.Parent then join.Text = "Entrar" end end)
+			end
+		end)
+	end
+	list.CanvasPosition = Vector2.new(0, 0)
+end
+
+local function fetch()
+	if busy then return end
+	busy = true
+	message("Buscando servidores...")
+	task.spawn(function()
+		local found, cursor, failed = {}, nil, false
+		for _ = 1, 3 do -- até 300 servidores
+			local url = "https://games.roblox.com/v1/games/" .. game.PlaceId
+				.. "/servers/Public?sortOrder=Desc&excludeFullGames=true&limit=100"
+			if cursor then url = url .. "&cursor=" .. cursor end
+			local data = apiJson(url)
+			if not data or type(data.data) ~= "table" then
+				failed = true
+				break
+			end
+			for _, s in ipairs(data.data) do table.insert(found, s) end
+			if type(data.nextPageCursor) ~= "string" then break end
+			cursor = data.nextPageCursor
+			task.wait(0.4)
+		end
+		busy = false
+		if not alive then return end
+		if #found == 0 and failed then
+			message("Não consegui buscar (sem http ou limite do Roblox). Toque em Atualizar.")
+			return
+		end
+		all, page = found, 1
+		render()
+	end)
+end
+
+refreshBtn.Activated:Connect(fetch)
+backBtn.Activated:Connect(function()
+	if page > 1 then page -= 1 render() end
+end)
+nextBtn.Activated:Connect(function()
+	page += 1
+	render()
+end)
+pingBtn.Activated:Connect(function()
+	pingIdx = pingIdx % #PING_OPTS + 1
+	pingBtn.Text = pingIdx == 1 and "Ping: todos" or ("Ping: até " .. PING_OPTS[pingIdx])
+	page = 1
+	render()
+end)
+minBtn.Activated:Connect(function()
+	minIdx = minIdx % #MIN_OPTS + 1
+	minBtn.Text = minIdx == 1 and "Jogadores: todos" or ("Jogadores: " .. MIN_OPTS[minIdx] .. "+")
+	page = 1
+	render()
+end)
+
+-- ping do servidor atual, atualizado a cada segundo
+task.spawn(function()
+	while alive and gui.Parent do
+		local ms = currentPing()
+		info.Text = "Servidor atual: ping " .. ms .. " ms  •  " .. #Players:GetPlayers() .. "/" .. Players.MaxPlayers
+			.. " jogadores\nLocalização: o Roblox não informa (estimativa: " .. regionGuess(ms) .. ")"
+		task.wait(1)
+	end
+end)
+
+fetch()
