@@ -1,0 +1,506 @@
+-- ===== LANTERNA FALSA =====
+-- Botão "LUZ":
+--   toque rápido      : liga / desliga (com click)
+--   segurar 1s        : fixa o botão (solta o dedo); segurar 1s de novo solta ele para mover
+--   segurar 3s        : abre / fecha o menu de configuração
+--   segurar 7s        : fecha tudo (apaga o botão e a luz)
+-- Com o botão solto (não fixo) dá para arrastar. Ele não sai da tela.
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local HttpService = game:GetService("HttpService")
+
+local lp = Players.LocalPlayer
+local env = (getgenv and getgenv()) or _G
+
+if env.FakeLightOff then pcall(env.FakeLightOff) end
+
+-- ===== PRESET =====
+local FILE = "FakeLight_preset.json"
+local hasFS = type(writefile) == "function" and type(readfile) == "function" and type(isfile) == "function"
+local DEFAULT = { range = 60, brightness = 6, angle = 55, ox = 1.2, oy = -1, bx = 12, by = 160, locked = false }
+local cfg = {}
+for k, v in pairs(DEFAULT) do cfg[k] = v end
+
+do
+	local data
+	if hasFS then
+		local ok, d = pcall(function()
+			if isfile(FILE) then return HttpService:JSONDecode(readfile(FILE)) end
+			return nil
+		end)
+		if ok and type(d) == "table" then data = d end
+	end
+	if not data and type(env.FakeLightPreset) == "table" then data = env.FakeLightPreset end
+	if data then
+		for k, v in pairs(DEFAULT) do
+			if type(data[k]) == type(v) then cfg[k] = data[k] end
+		end
+	end
+end
+
+local function savePreset()
+	local copy = {}
+	for k in pairs(DEFAULT) do copy[k] = cfg[k] end
+	env.FakeLightPreset = copy
+	if hasFS then
+		local ok = pcall(function() writefile(FILE, HttpService:JSONEncode(copy)) end)
+		return ok and "Preset salvo!" or "Falhou ao salvar"
+	end
+	return "Salvo só até fechar o jogo (sem writefile)"
+end
+
+-- ===== LUZ =====
+local function mkPart(name)
+	local p = Instance.new("Part")
+	p.Name = name
+	p.Anchored = true
+	p.CanCollide = false
+	p.CanQuery = false
+	p.CanTouch = false
+	p.Transparency = 1
+	p.Size = Vector3.new(0.2, 0.2, 0.2)
+	p.Parent = workspace
+	return p
+end
+
+local src, tip = mkPart("FakeLightSrc"), mkPart("FakeLightTip")
+
+local spot = Instance.new("SpotLight")
+spot.Face = Enum.NormalId.Front
+spot.Shadows = false
+spot.Color = Color3.fromRGB(255, 244, 214)
+spot.Parent = src
+
+local glow = Instance.new("PointLight")
+glow.Shadows = false
+glow.Color = spot.Color
+glow.Parent = src
+
+local a0 = Instance.new("Attachment", src)
+local a1 = Instance.new("Attachment", tip)
+local beam = Instance.new("Beam")
+beam.Attachment0, beam.Attachment1 = a0, a1
+beam.Width0 = 0.15
+beam.Transparency = NumberSequence.new(0.88, 1)
+beam.LightEmission = 1
+beam.Color = ColorSequence.new(spot.Color)
+beam.FaceCamera = true
+beam.Parent = src
+
+local function applyLight()
+	spot.Range = cfg.range
+	spot.Brightness = cfg.brightness
+	spot.Angle = cfg.angle
+	glow.Range = math.max(6, cfg.range * 0.25)
+	glow.Brightness = math.max(0.4, cfg.brightness * 0.2)
+	local len = math.min(cfg.range, 60)
+	beam.Width1 = math.max(1, 2 * math.tan(math.rad(cfg.angle / 2)) * len * 0.6)
+end
+applyLight()
+
+local rp = RaycastParams.new()
+rp.FilterType = Enum.RaycastFilterType.Exclude
+
+-- ===== TELA =====
+local gui = Instance.new("ScreenGui")
+gui.Name = "FakeLightGui"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.DisplayOrder = 900
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.Parent = lp:WaitForChild("PlayerGui")
+
+local function mkSound(id, vol, speed)
+	local s = Instance.new("Sound")
+	s.SoundId = id
+	s.Volume = vol
+	s.PlaybackSpeed = speed
+	s.Parent = gui
+	return s
+end
+-- sons que já vêm no app do Roblox (se algum não tocar, troque o caminho aqui)
+local sndOn = mkSound("rbxasset://sounds/switch.wav", 0.9, 1.3)
+local sndOff = mkSound("rbxasset://sounds/button.wav", 0.9, 0.75)
+local function play(s)
+	pcall(function()
+		s.TimePosition = 0
+		s:Play()
+	end)
+end
+
+local COL_ON, COL_OFF = Color3.fromRGB(255, 236, 170), Color3.fromRGB(28, 28, 34)
+local TXT_ON, TXT_OFF = Color3.fromRGB(30, 30, 34), Color3.fromRGB(230, 230, 236)
+
+local btn = Instance.new("TextButton")
+btn.Name = "LuzBtn"
+btn.Size = UDim2.fromOffset(58, 58)
+btn.AutoButtonColor = false
+btn.Font = Enum.Font.GothamBold
+btn.TextSize = 15
+btn.Text = "LUZ"
+btn.Parent = gui
+Instance.new("UICorner", btn).CornerRadius = UDim.new(1, 0)
+local stroke = Instance.new("UIStroke", btn)
+stroke.Thickness = 2.5
+
+local hint = Instance.new("TextLabel")
+hint.AnchorPoint = Vector2.new(0.5, 1)
+hint.Position = UDim2.new(0.5, 0, 0, -6)
+hint.Size = UDim2.fromOffset(190, 22)
+hint.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
+hint.BackgroundTransparency = 0.15
+hint.TextColor3 = Color3.fromRGB(235, 235, 240)
+hint.Font = Enum.Font.GothamMedium
+hint.TextSize = 12
+hint.Visible = false
+hint.Parent = btn
+Instance.new("UICorner", hint).CornerRadius = UDim.new(0, 8)
+
+local on = true
+local closed = false
+local uiConns = {}
+
+local function paintButton()
+	btn.BackgroundColor3 = on and COL_ON or COL_OFF
+	btn.TextColor3 = on and TXT_ON or TXT_OFF
+	stroke.Color = cfg.locked and Color3.fromRGB(255, 190, 70) or Color3.fromRGB(120, 120, 130)
+end
+
+local function setLight(v, silent)
+	on = v
+	spot.Enabled, glow.Enabled, beam.Enabled = v, v, v
+	paintButton()
+	if not silent then play(v and sndOn or sndOff) end
+end
+
+local hintToken = 0
+local function flashHint(text)
+	hintToken += 1
+	local my = hintToken
+	hint.Text = text
+	hint.Visible = true
+	task.delay(1.2, function()
+		if hintToken == my then hint.Visible = false end
+	end)
+end
+
+local function clampBtn()
+	local s, b = gui.AbsoluteSize, btn.AbsoluteSize
+	cfg.bx = math.clamp(cfg.bx, 0, math.max(0, s.X - b.X))
+	cfg.by = math.clamp(cfg.by, 0, math.max(0, s.Y - b.Y))
+	btn.Position = UDim2.fromOffset(cfg.bx, cfg.by)
+end
+btn.Position = UDim2.fromOffset(cfg.bx, cfg.by)
+task.defer(function()
+	task.wait()
+	if not closed then clampBtn() end
+end)
+setLight(true, true)
+
+-- ===== MENU DE CONFIGURAÇÃO =====
+local menu = Instance.new("Frame")
+menu.AnchorPoint = Vector2.new(0.5, 0.5)
+menu.Position = UDim2.fromScale(0.5, 0.5)
+menu.Size = UDim2.fromOffset(300, 300)
+menu.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+menu.Active = true
+menu.Visible = false
+menu.Parent = gui
+Instance.new("UICorner", menu).CornerRadius = UDim.new(0, 14)
+local menuScale = Instance.new("UIScale", menu)
+
+local function sizeMenu()
+	local s = gui.AbsoluteSize
+	menu.Size = UDim2.fromOffset(math.min(300, s.X - 20), math.min(330, s.Y - 20))
+end
+
+local title = Instance.new("TextLabel")
+title.BackgroundTransparency = 1
+title.Position = UDim2.fromOffset(14, 6)
+title.Size = UDim2.new(1, -28, 0, 26)
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Font = Enum.Font.GothamBold
+title.TextSize = 16
+title.TextColor3 = Color3.fromRGB(235, 235, 240)
+title.Text = "Configurar lanterna"
+title.Parent = menu
+
+local list = Instance.new("ScrollingFrame")
+list.BackgroundTransparency = 1
+list.BorderSizePixel = 0
+list.Position = UDim2.fromOffset(8, 36)
+list.Size = UDim2.new(1, -16, 1, -44)
+list.ScrollBarThickness = 4
+list.AutomaticCanvasSize = Enum.AutomaticSize.Y
+list.CanvasSize = UDim2.new()
+list.Parent = menu
+local ll = Instance.new("UIListLayout", list)
+ll.Padding = UDim.new(0, 6)
+ll.SortOrder = Enum.SortOrder.LayoutOrder
+local lpad = Instance.new("UIPadding", list)
+lpad.PaddingLeft, lpad.PaddingRight = UDim.new(0, 4), UDim.new(0, 8)
+
+local refreshers = {}
+local order = 0
+local sliderDrag = false
+
+local function addSlider(label, min, max, key, decimals)
+	order += 1
+	local row = Instance.new("Frame")
+	row.BackgroundTransparency = 1
+	row.Size = UDim2.new(1, 0, 0, 48)
+	row.LayoutOrder = order
+	row.Parent = list
+
+	local lbl = Instance.new("TextLabel")
+	lbl.BackgroundTransparency = 1
+	lbl.Size = UDim2.new(1, 0, 0, 18)
+	lbl.TextXAlignment = Enum.TextXAlignment.Left
+	lbl.Font = Enum.Font.GothamMedium
+	lbl.TextSize = 13
+	lbl.TextColor3 = Color3.fromRGB(225, 225, 232)
+	lbl.Parent = row
+
+	local track = Instance.new("Frame")
+	track.Position = UDim2.new(0, 8, 0, 32)
+	track.Size = UDim2.new(1, -16, 0, 6)
+	track.BackgroundColor3 = Color3.fromRGB(52, 52, 60)
+	track.BorderSizePixel = 0
+	track.Parent = row
+	Instance.new("UICorner", track).CornerRadius = UDim.new(1, 0)
+
+	local fill = Instance.new("Frame")
+	fill.BackgroundColor3 = Color3.fromRGB(255, 236, 170)
+	fill.BorderSizePixel = 0
+	fill.Size = UDim2.fromScale(0, 1)
+	fill.Parent = track
+	Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
+
+	local knob = Instance.new("Frame")
+	knob.AnchorPoint = Vector2.new(0.5, 0.5)
+	knob.Size = UDim2.fromOffset(18, 18)
+	knob.BackgroundColor3 = Color3.fromRGB(235, 235, 240)
+	knob.BorderSizePixel = 0
+	knob.Parent = track
+	Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
+
+	local hit = Instance.new("TextButton") -- área de toque maior
+	hit.BackgroundTransparency = 1
+	hit.Text = ""
+	hit.Position = UDim2.new(0, 0, 0, 18)
+	hit.Size = UDim2.new(1, 0, 0, 30)
+	hit.Parent = row
+
+	local function fmt(v)
+		if decimals > 0 then return string.format("%." .. decimals .. "f", v) end
+		return tostring(math.floor(v + 0.5))
+	end
+	local function refresh()
+		local a = math.clamp((cfg[key] - min) / (max - min), 0, 1)
+		fill.Size = UDim2.fromScale(a, 1)
+		knob.Position = UDim2.new(a, 0, 0.5, 0)
+		lbl.Text = label .. ": " .. fmt(cfg[key])
+	end
+	table.insert(refreshers, refresh)
+
+	local dragging = false
+	local function setFromX(x)
+		local a = math.clamp((x - track.AbsolutePosition.X) / math.max(1, track.AbsoluteSize.X), 0, 1)
+		local step = 10 ^ -decimals
+		cfg[key] = math.floor((min + a * (max - min)) / step + 0.5) * step
+		refresh()
+		applyLight()
+	end
+	hit.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging, sliderDrag = true, true
+			list.ScrollingEnabled = false -- arrastar o controle não rola o menu
+			setFromX(input.Position.X)
+		end
+	end)
+	table.insert(uiConns, UIS.InputChanged:Connect(function(input)
+		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+			or input.UserInputType == Enum.UserInputType.Touch) then
+			setFromX(input.Position.X)
+		end
+	end))
+	table.insert(uiConns, UIS.InputEnded:Connect(function(input)
+		if dragging and (input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch) then
+			dragging, sliderDrag = false, false
+			list.ScrollingEnabled = true
+		end
+	end))
+	refresh()
+end
+
+addSlider("Alcance", 10, 150, "range", 0)
+addSlider("Força", 1, 20, "brightness", 1)
+addSlider("Cone (abertura)", 10, 120, "angle", 0)
+addSlider("Posição horizontal na tela", -3, 3, "ox", 1)
+addSlider("Posição vertical na tela", -3, 1.5, "oy", 1)
+
+local status = Instance.new("TextLabel")
+status.BackgroundTransparency = 1
+status.Size = UDim2.new(1, 0, 0, 16)
+status.Font = Enum.Font.GothamMedium
+status.TextSize = 12
+status.TextColor3 = Color3.fromRGB(150, 150, 160)
+status.Text = ""
+status.LayoutOrder = 100
+status.Parent = list
+
+local statusToken = 0
+local function say(text)
+	statusToken += 1
+	local my = statusToken
+	status.Text = text
+	task.delay(2.5, function()
+		if statusToken == my then status.Text = "" end
+	end)
+end
+
+local function menuButton(text, ord, fn)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.new(1, 0, 0, 34)
+	b.BackgroundColor3 = Color3.fromRGB(52, 52, 60)
+	b.TextColor3 = Color3.fromRGB(230, 230, 236)
+	b.Font = Enum.Font.GothamMedium
+	b.TextSize = 14
+	b.Text = text
+	b.AutoButtonColor = true
+	b.LayoutOrder = ord
+	b.Parent = list
+	Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
+	b.Activated:Connect(fn)
+	return b
+end
+
+local function openMenu(open)
+	if open then
+		sizeMenu()
+		menu.Visible = true
+		menuScale.Scale = 0.7
+		TweenService:Create(menuScale, TweenInfo.new(0.22, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+	else
+		menu.Visible = false
+	end
+end
+
+menuButton("Salvar preset", 101, function() say(savePreset()) end)
+menuButton("Resetar valores", 102, function()
+	for k, v in pairs(DEFAULT) do
+		if k ~= "bx" and k ~= "by" and k ~= "locked" then cfg[k] = v end
+	end
+	for _, r in ipairs(refreshers) do r() end
+	applyLight()
+	say("Valores padrão (toque em Salvar para guardar)")
+end)
+menuButton("Fechar menu", 103, function() openMenu(false) end)
+
+-- ===== FECHAR TUDO =====
+local renderConn
+local function closeAll()
+	if closed then return end
+	closed = true
+	if renderConn then renderConn:Disconnect() end
+	for _, c in ipairs(uiConns) do pcall(function() c:Disconnect() end) end
+	src:Destroy() -- leva a luz e o feixe junto
+	tip:Destroy()
+	gui:Destroy()
+	env.FakeLightOff = nil
+end
+env.FakeLightOff = closeAll
+
+-- ===== GESTOS DO BOTÃO =====
+local function isPress(input)
+	return input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch
+end
+
+local active = nil -- { input, t0, sp, bx, by, moved }
+
+btn.InputBegan:Connect(function(input)
+	if not isPress(input) or active then return end
+	active = {
+		input = input,
+		t0 = os.clock(),
+		sp = Vector2.new(input.Position.X, input.Position.Y),
+		bx = cfg.bx,
+		by = cfg.by,
+		moved = false,
+	}
+end)
+
+table.insert(uiConns, UIS.InputChanged:Connect(function(input)
+	local a = active
+	if not a or cfg.locked then return end -- fixo: não move
+	local ok = input.UserInputType == Enum.UserInputType.MouseMovement
+		or (input.UserInputType == Enum.UserInputType.Touch and input == a.input)
+	if not ok then return end
+	local d = Vector2.new(input.Position.X, input.Position.Y) - a.sp
+	if not a.moved and d.Magnitude > 10 then
+		a.moved = true
+		hint.Visible = false
+	end
+	if a.moved then
+		cfg.bx, cfg.by = a.bx + d.X, a.by + d.Y
+		clampBtn()
+	end
+end))
+
+table.insert(uiConns, UIS.InputEnded:Connect(function(input)
+	local a = active
+	if not a then return end
+	local same = input == a.input
+		or (input.UserInputType == Enum.UserInputType.MouseButton1 and a.input.UserInputType == Enum.UserInputType.MouseButton1)
+	if not same then return end
+	active = nil
+	hint.Visible = false
+	if a.moved then return end -- foi arrastar
+	local e = os.clock() - a.t0
+	if e < 1 then
+		setLight(not on)
+	elseif e < 3 then
+		cfg.locked = not cfg.locked
+		paintButton()
+		play(cfg.locked and sndOn or sndOff)
+		flashHint(cfg.locked and "Botão fixo" or "Botão solto: pode mover")
+	elseif e < 7 then
+		openMenu(not menu.Visible)
+	end
+end))
+
+-- ===== ATUALIZA A LUZ E O QUE APARECE ENQUANTO SEGURA =====
+renderConn = RunService.RenderStepped:Connect(function()
+	local a = active
+	if a and not a.moved then
+		local e = os.clock() - a.t0
+		if e >= 7 then
+			active = nil
+			closeAll()
+			return
+		elseif e >= 3 then
+			hint.Text = "Solte: configurações  (7s: fechar)"
+			hint.Visible = true
+		elseif e >= 1 then
+			hint.Text = cfg.locked and "Solte: destravar" or "Solte: fixar"
+			hint.Visible = true
+		end
+	end
+
+	if not on then return end
+	local cam = workspace.CurrentCamera
+	if not cam then return end
+	local o = (cam.CFrame * CFrame.new(cfg.ox, cfg.oy, -1.5)).Position
+	local look = cam.CFrame.LookVector
+	local dist = math.min(cfg.range, 60)
+	local filter = { src, tip }
+	if lp.Character then filter[3] = lp.Character end
+	rp.FilterDescendantsInstances = filter
+	local hit = workspace:Raycast(o, look * dist, rp)
+	src.CFrame = CFrame.lookAt(o, o + look)
+	tip.Position = hit and hit.Position or (o + look * dist)
+end)
