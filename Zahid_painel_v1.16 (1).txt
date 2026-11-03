@@ -76,7 +76,7 @@ do
 			task.wait(0.4)
 			warnGui:Destroy()
 		end)
-		return
+		existing:Destroy()
 	end
 end
 
