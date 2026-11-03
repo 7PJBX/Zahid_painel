@@ -1,4 +1,4 @@
-﻿-- ===== ZAHID PAINEL 1.16 =====
+-- ===== ZAHID PAINEL 1.16 =====
 -- Painel com abas (Comportamento, Jogadores, Server, Updates e Configurações), tema escuro/claro e sons nos botões.
 -- Para registrar uma versão nova no histórico, acrescente uma entrada no topo da lista UPDATES (aba Updates).
 
@@ -76,7 +76,7 @@ do
 			task.wait(0.4)
 			warnGui:Destroy()
 		end)
-		existing:Destroy()
+		return
 	end
 end
 
