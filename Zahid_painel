@@ -1746,10 +1746,18 @@ do
 	local zoomT = 0            -- 0 = sem zoom (fov normal) .. 1 = zoom máximo
 	local ZOOM_FOV_MIN = 12
 	local activeFov = config.fov
+    local UserGameSettings = UserSettings():GetService("UserGameSettings")
+    local baseMouseSens = UserGameSettings.MouseSensitivity
 
-	local function recomputeFov()
-		activeFov = binocularsEquipped and (config.fov - (config.fov - ZOOM_FOV_MIN) * zoomT) or config.fov
-	end
+    local function recomputeFov()
+    	activeFov = binocularsEquipped and (config.fov - (config.fov - ZOOM_FOV_MIN) * zoomT) or config.fov
+    	-- sensibilidade proporcional ao zoom (1 = normal, menor = mais lento)
+    	local ratio = math.tan(math.rad(activeFov / 2)) / math.tan(math.rad(config.fov / 2))
+    	ratio = math.clamp(ratio, 0.05, 1)
+    	pcall(function()
+    		UserGameSettings.MouseSensitivity = baseMouseSens * ratio
+    	end)
+    end
 
 	-- aplica o FOV o tempo todo (some do close/toggles: fica sempre ligado, igual ao botão do menu)
 	conns.fovLoop = RunService.RenderStepped:Connect(function()
