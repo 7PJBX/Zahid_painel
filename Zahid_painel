@@ -1736,278 +1736,281 @@ local function addToggle(page, key, name, desc, fn)
 end
 
 -- ===== CÂMERA: FOV, BINÓCULOS E TRAVA DE DIREÇÃO =====
-local FOV_MIN, FOV_MAX = 30, 100
-local function clampFov(v) return math.clamp(v, FOV_MIN, FOV_MAX) end
-config.fov = clampFov(config.fov)
+local binocularsToggle, setShiftLockFeature, setBaseFov
+do
+	local FOV_MIN, FOV_MAX = 30, 100
+	local function clampFov(v) return math.clamp(v, FOV_MIN, FOV_MAX) end
+	config.fov = clampFov(config.fov)
 
-local binocularsEquipped = false
-local zoomT = 0            -- 0 = sem zoom (fov normal) .. 1 = zoom máximo
-local ZOOM_FOV_MIN = 12
-local activeFov = config.fov
+	local binocularsEquipped = false
+	local zoomT = 0            -- 0 = sem zoom (fov normal) .. 1 = zoom máximo
+	local ZOOM_FOV_MIN = 12
+	local activeFov = config.fov
 
-local function recomputeFov()
-	activeFov = binocularsEquipped and (config.fov - (config.fov - ZOOM_FOV_MIN) * zoomT) or config.fov
-end
+	local function recomputeFov()
+		activeFov = binocularsEquipped and (config.fov - (config.fov - ZOOM_FOV_MIN) * zoomT) or config.fov
+	end
 
--- aplica o FOV o tempo todo (some do close/toggles: fica sempre ligado, igual ao botão do menu)
-conns.fovLoop = RunService.RenderStepped:Connect(function()
-	local cam = workspace.CurrentCamera
-	if cam then cam.FieldOfView = activeFov end
-end)
+	-- aplica o FOV o tempo todo (some do close/toggles: fica sempre ligado, igual ao botão do menu)
+	conns.fovLoop = RunService.RenderStepped:Connect(function()
+		local cam = workspace.CurrentCamera
+		if cam then cam.FieldOfView = activeFov end
+	end)
 
-local function setBaseFov(v)
-	config.fov = clampFov(v)
-	recomputeFov()
-	saveConfig()
-end
+	function setBaseFov(v)
+		config.fov = clampFov(v)
+		recomputeFov()
+		saveConfig()
+	end
 
--- ===== BINÓCULOS (ferramenta): barra de zoom à direita + moldura na tela, só enquanto equipada =====
-local binOverlay = Instance.new("ScreenGui")
-binOverlay.Name = "Binoculos"
-binOverlay.ResetOnSpawn = false
-binOverlay.DisplayOrder = 15
-binOverlay.Enabled = false
-binOverlay.Parent = player:WaitForChild("PlayerGui")
+	-- ===== BINÓCULOS (ferramenta): barra de zoom à direita + moldura na tela, só enquanto equipada =====
+	local binOverlay = Instance.new("ScreenGui")
+	binOverlay.Name = "Binoculos"
+	binOverlay.ResetOnSpawn = false
+	binOverlay.DisplayOrder = 15
+	binOverlay.Enabled = false
+	binOverlay.Parent = player:WaitForChild("PlayerGui")
 
--- moldura (4 tarjas pretas deixando uma janela central, lembrando o visor de um binóculo)
-local function bar()
-	local f = Instance.new("Frame")
-	f.BackgroundColor3 = Color3.new(0, 0, 0)
-	f.BorderSizePixel = 0
-	f.Parent = binOverlay
-	return f
-end
-local barTop, barBottom, barLeft, barRight = bar(), bar(), bar(), bar()
-local function layoutBars()
-	local screen = gui.AbsoluteSize
-	local w, h = screen.X, screen.Y
-	if w <= 0 or h <= 0 then return end
-	local winW = math.min(w * 0.82, h * 1.5)
-	local winH = winW * 0.62
-	local x0, y0 = (w - winW) / 2, (h - winH) / 2
-	barTop.Size, barTop.Position = UDim2.fromOffset(w, y0), UDim2.fromOffset(0, 0)
-	barBottom.Size, barBottom.Position = UDim2.fromOffset(w, h - (y0 + winH)), UDim2.fromOffset(0, y0 + winH)
-	barLeft.Size, barLeft.Position = UDim2.fromOffset(x0, winH), UDim2.fromOffset(0, y0)
-	barRight.Size, barRight.Position = UDim2.fromOffset(w - (x0 + winW), winH), UDim2.fromOffset(x0 + winW, y0)
-end
-layoutBars()
-gui:GetPropertyChangedSignal("AbsoluteSize"):Connect(layoutBars)
+	-- moldura (4 tarjas pretas deixando uma janela central, lembrando o visor de um binóculo)
+	local function bar()
+		local f = Instance.new("Frame")
+		f.BackgroundColor3 = Color3.new(0, 0, 0)
+		f.BorderSizePixel = 0
+		f.Parent = binOverlay
+		return f
+	end
+	local barTop, barBottom, barLeft, barRight = bar(), bar(), bar(), bar()
+	local function layoutBars()
+		local screen = gui.AbsoluteSize
+		local w, h = screen.X, screen.Y
+		if w <= 0 or h <= 0 then return end
+		local winW = math.min(w * 0.82, h * 1.5)
+		local winH = winW * 0.62
+		local x0, y0 = (w - winW) / 2, (h - winH) / 2
+		barTop.Size, barTop.Position = UDim2.fromOffset(w, y0), UDim2.fromOffset(0, 0)
+		barBottom.Size, barBottom.Position = UDim2.fromOffset(w, h - (y0 + winH)), UDim2.fromOffset(0, y0 + winH)
+		barLeft.Size, barLeft.Position = UDim2.fromOffset(x0, winH), UDim2.fromOffset(0, y0)
+		barRight.Size, barRight.Position = UDim2.fromOffset(w - (x0 + winW), winH), UDim2.fromOffset(x0 + winW, y0)
+	end
+	layoutBars()
+	gui:GetPropertyChangedSignal("AbsoluteSize"):Connect(layoutBars)
 
--- barra de zoom vertical, lado direito da tela (arrastável para cima/baixo)
-local trackH = 220
-local zoomTrack = Instance.new("Frame")
-zoomTrack.AnchorPoint = Vector2.new(1, 0.5)
-zoomTrack.Position = UDim2.new(1, -18, 0.5, 0)
-zoomTrack.Size = UDim2.fromOffset(10, trackH)
-zoomTrack.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-zoomTrack.BackgroundTransparency = 0.75
-zoomTrack.BorderSizePixel = 0
-zoomTrack.Parent = binOverlay
-Instance.new("UICorner", zoomTrack).CornerRadius = UDim.new(1, 0)
+	-- barra de zoom vertical, lado direito da tela (arrastável para cima/baixo)
+	local trackH = 220
+	local zoomTrack = Instance.new("Frame")
+	zoomTrack.AnchorPoint = Vector2.new(1, 0.5)
+	zoomTrack.Position = UDim2.new(1, -18, 0.5, 0)
+	zoomTrack.Size = UDim2.fromOffset(10, trackH)
+	zoomTrack.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	zoomTrack.BackgroundTransparency = 0.75
+	zoomTrack.BorderSizePixel = 0
+	zoomTrack.Parent = binOverlay
+	Instance.new("UICorner", zoomTrack).CornerRadius = UDim.new(1, 0)
 
-local zoomKnob = Instance.new("Frame")
-zoomKnob.AnchorPoint = Vector2.new(0.5, 0.5)
-zoomKnob.Size = UDim2.fromOffset(34, 34)
-zoomKnob.Position = UDim2.new(0.5, 0, 1, 0)
-zoomKnob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-zoomKnob.BorderSizePixel = 0
-zoomKnob.Active = true
-zoomKnob.Parent = zoomTrack
-Instance.new("UICorner", zoomKnob).CornerRadius = UDim.new(1, 0)
-local zoomKnobStroke = Instance.new("UIStroke")
-zoomKnobStroke.Thickness = 2
-zoomKnobStroke.Color = Color3.fromRGB(20, 20, 24)
-zoomKnobStroke.Parent = zoomKnob
+	local zoomKnob = Instance.new("Frame")
+	zoomKnob.AnchorPoint = Vector2.new(0.5, 0.5)
+	zoomKnob.Size = UDim2.fromOffset(34, 34)
+	zoomKnob.Position = UDim2.new(0.5, 0, 1, 0)
+	zoomKnob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	zoomKnob.BorderSizePixel = 0
+	zoomKnob.Active = true
+	zoomKnob.Parent = zoomTrack
+	Instance.new("UICorner", zoomKnob).CornerRadius = UDim.new(1, 0)
+	local zoomKnobStroke = Instance.new("UIStroke")
+	zoomKnobStroke.Thickness = 2
+	zoomKnobStroke.Color = Color3.fromRGB(20, 20, 24)
+	zoomKnobStroke.Parent = zoomKnob
 
-local zoomClick = Instance.new("Sound")
-zoomClick.SoundId = "rbxasset://sounds/clickfast.mp3"
-zoomClick.Volume = 0.45
-zoomClick.Parent = binOverlay
+	local zoomClick = Instance.new("Sound")
+	zoomClick.SoundId = "rbxasset://sounds/clickfast.mp3"
+	zoomClick.Volume = 0.45
+	zoomClick.Parent = binOverlay
 
-local zoomDragging, zoomLastStep = false, -1
-local function setZoomFromY(y)
-	local a = math.clamp((y - zoomTrack.AbsolutePosition.Y) / zoomTrack.AbsoluteSize.Y, 0, 1)
-	zoomT = 1 - a
-	zoomKnob.Position = UDim2.new(0.5, 0, a, 0)
-	recomputeFov()
-	local step = math.floor(zoomT * 20 + 0.5)
-	if step ~= zoomLastStep then
-		zoomLastStep = step
-		if config.sound then
-			zoomClick.PlaybackSpeed = 1 + zoomT * 0.4
-			zoomClick.TimePosition = 0
-			zoomClick:Play()
+	local zoomDragging, zoomLastStep = false, -1
+	local function setZoomFromY(y)
+		local a = math.clamp((y - zoomTrack.AbsolutePosition.Y) / zoomTrack.AbsoluteSize.Y, 0, 1)
+		zoomT = 1 - a
+		zoomKnob.Position = UDim2.new(0.5, 0, a, 0)
+		recomputeFov()
+		local step = math.floor(zoomT * 20 + 0.5)
+		if step ~= zoomLastStep then
+			zoomLastStep = step
+			if config.sound then
+				zoomClick.PlaybackSpeed = 1 + zoomT * 0.4
+				zoomClick.TimePosition = 0
+				zoomClick:Play()
+			end
 		end
 	end
-end
-local function zoomDragStart(input)
-	if isPress(input) then
-		zoomDragging = true
-		setZoomFromY(input.Position.Y)
+	local function zoomDragStart(input)
+		if isPress(input) then
+			zoomDragging = true
+			setZoomFromY(input.Position.Y)
+		end
 	end
-end
-zoomTrack.InputBegan:Connect(zoomDragStart)
-zoomKnob.InputBegan:Connect(zoomDragStart)
-UIS.InputChanged:Connect(function(input)
-	if zoomDragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-		setZoomFromY(input.Position.Y)
-	end
-end)
-UIS.InputEnded:Connect(function(input)
-	if isPress(input) then zoomDragging = false end
-end)
-
-local function showBinocularUI()
-	layoutBars()
-	binOverlay.Enabled = true
-end
-local function hideBinocularUI()
-	binOverlay.Enabled = false
-	binocularsEquipped = false
-	recomputeFov()
-end
-
-local function giveBinoculars()
-	local backpack = player:FindFirstChildOfClass("Backpack")
-	if not backpack or backpack:FindFirstChild("Binoculos") then return end
-	local tool = Instance.new("Tool")
-	tool.Name = "Binoculos"
-	tool.RequiresHandle = false
-	tool.CanBeDropped = false
-	tool.Equipped:Connect(function()
-		binocularsEquipped = true
-		zoomT = 0
-		zoomLastStep = -1
-		zoomKnob.Position = UDim2.new(0.5, 0, 1, 0)
-		recomputeFov()
-		showBinocularUI()
+	zoomTrack.InputBegan:Connect(zoomDragStart)
+	zoomKnob.InputBegan:Connect(zoomDragStart)
+	UIS.InputChanged:Connect(function(input)
+		if zoomDragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+			setZoomFromY(input.Position.Y)
+		end
 	end)
-	tool.Unequipped:Connect(hideBinocularUI)
-	tool.Parent = backpack
-end
-local function removeBinoculars()
-	local bp = player:FindFirstChildOfClass("Backpack")
-	if bp and bp:FindFirstChild("Binoculos") then bp.Binoculos:Destroy() end
-	if player.Character and player.Character:FindFirstChild("Binoculos") then
-		player.Character.Binoculos:Destroy()
+	UIS.InputEnded:Connect(function(input)
+		if isPress(input) then zoomDragging = false end
+	end)
+
+	local function showBinocularUI()
+		layoutBars()
+		binOverlay.Enabled = true
 	end
-	hideBinocularUI()
-end
-local function binocularsToggle(on)
-	if on then giveBinoculars() else removeBinoculars() end
-end
-
--- ===== TRAVA DE DIREÇÃO (estilo shift lock): botão preto arrastável, 70% transparente =====
-local shiftGui = Instance.new("ScreenGui")
-shiftGui.Name = "TravaDirecao"
-shiftGui.ResetOnSpawn = false
-shiftGui.DisplayOrder = 18
-shiftGui.Enabled = false
-shiftGui.Parent = player:WaitForChild("PlayerGui")
-
-local SB = 56
-local shiftBtn = Instance.new("TextButton")
-shiftBtn.AnchorPoint = Vector2.new(0.5, 0.5)
-shiftBtn.Size = UDim2.fromOffset(SB, SB)
-shiftBtn.Position = UDim2.fromScale(0.5, 0.78)
-shiftBtn.BackgroundColor3 = Color3.new(0, 0, 0)
-shiftBtn.BackgroundTransparency = 0.7
-shiftBtn.AutoButtonColor = false
-shiftBtn.Text = ""
-shiftBtn.Active = true
-shiftBtn.Parent = shiftGui
-Instance.new("UICorner", shiftBtn).CornerRadius = UDim.new(1, 0)
-local shiftStroke = Instance.new("UIStroke")
-shiftStroke.Thickness = 0
-shiftStroke.Color = Color3.fromRGB(255, 255, 255)
-shiftStroke.Parent = shiftBtn
-
-local lockFacing = false
-local btnLocked = false
-local facingConn = nil
-
--- gira o personagem para olhar para onde a câmera olha (como o shift lock) e desliga o giro automático
-local function applyFacing()
-	local char = player.Character
-	local hum = char and char:FindFirstChildOfClass("Humanoid")
-	local hrp = char and char:FindFirstChild("HumanoidRootPart")
-	local cam = workspace.CurrentCamera
-	if not (hum and hrp and cam) then return end
-	hum.AutoRotate = false
-	local look = cam.CFrame.LookVector
-	local yaw = math.atan2(-look.X, -look.Z)
-	hrp.CFrame = CFrame.new(hrp.Position) * CFrame.Angles(0, yaw, 0)
-end
-
-local function setLockFacing(on)
-	lockFacing = on
-	tween(shiftBtn, 0.15, { BackgroundTransparency = on and 0.35 or 0.7 })
-	shiftStroke.Thickness = on and 2 or (btnLocked and 1 or 0)
-	if on then
-		if facingConn then facingConn:Disconnect() end
-		facingConn = RunService.RenderStepped:Connect(applyFacing)
-	else
-		if facingConn then facingConn:Disconnect() facingConn = nil end
-		local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
-		if hum then hum.AutoRotate = true end
+	local function hideBinocularUI()
+		binOverlay.Enabled = false
+		binocularsEquipped = false
+		recomputeFov()
 	end
-end
 
--- arraste livre pela tela; segurar 1s sem mover trava (ou destrava) a posição do botão
-local sbDragging, sbStart, sbMoved, sbHoldTok = false, Vector2.zero, false, 0
-shiftBtn.InputBegan:Connect(function(input)
-	if not isPress(input) then return end
-	sbDragging = not btnLocked
-	sbStart = input.Position
-	sbMoved = false
-	sbHoldTok += 1
-	local mine = sbHoldTok
-	task.delay(1, function()
-		if mine ~= sbHoldTok or sbMoved then return end
-		btnLocked = not btnLocked
-		sbDragging = false
-		shiftStroke.Thickness = lockFacing and 2 or (btnLocked and 1 or 0)
-		local old = shiftBtn.BackgroundColor3
-		shiftBtn.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-		task.delay(0.12, function()
-			if shiftBtn.Parent then shiftBtn.BackgroundColor3 = old end
+	local function giveBinoculars()
+		local backpack = player:FindFirstChildOfClass("Backpack")
+		if not backpack or backpack:FindFirstChild("Binoculos") then return end
+		local tool = Instance.new("Tool")
+		tool.Name = "Binoculos"
+		tool.RequiresHandle = false
+		tool.CanBeDropped = false
+		tool.Equipped:Connect(function()
+			binocularsEquipped = true
+			zoomT = 0
+			zoomLastStep = -1
+			zoomKnob.Position = UDim2.new(0.5, 0, 1, 0)
+			recomputeFov()
+			showBinocularUI()
+		end)
+		tool.Unequipped:Connect(hideBinocularUI)
+		tool.Parent = backpack
+	end
+	local function removeBinoculars()
+		local bp = player:FindFirstChildOfClass("Backpack")
+		if bp and bp:FindFirstChild("Binoculos") then bp.Binoculos:Destroy() end
+		if player.Character and player.Character:FindFirstChild("Binoculos") then
+			player.Character.Binoculos:Destroy()
+		end
+		hideBinocularUI()
+	end
+	function binocularsToggle(on)
+		if on then giveBinoculars() else removeBinoculars() end
+	end
+
+	-- ===== TRAVA DE DIREÇÃO (estilo shift lock): botão preto arrastável, 70% transparente =====
+	local shiftGui = Instance.new("ScreenGui")
+	shiftGui.Name = "TravaDirecao"
+	shiftGui.ResetOnSpawn = false
+	shiftGui.DisplayOrder = 18
+	shiftGui.Enabled = false
+	shiftGui.Parent = player:WaitForChild("PlayerGui")
+
+	local SB = 56
+	local shiftBtn = Instance.new("TextButton")
+	shiftBtn.AnchorPoint = Vector2.new(0.5, 0.5)
+	shiftBtn.Size = UDim2.fromOffset(SB, SB)
+	shiftBtn.Position = UDim2.fromScale(0.5, 0.78)
+	shiftBtn.BackgroundColor3 = Color3.new(0, 0, 0)
+	shiftBtn.BackgroundTransparency = 0.7
+	shiftBtn.AutoButtonColor = false
+	shiftBtn.Text = ""
+	shiftBtn.Active = true
+	shiftBtn.Parent = shiftGui
+	Instance.new("UICorner", shiftBtn).CornerRadius = UDim.new(1, 0)
+	local shiftStroke = Instance.new("UIStroke")
+	shiftStroke.Thickness = 0
+	shiftStroke.Color = Color3.fromRGB(255, 255, 255)
+	shiftStroke.Parent = shiftBtn
+
+	local lockFacing = false
+	local btnLocked = false
+	local facingConn = nil
+
+	-- gira o personagem para olhar para onde a câmera olha (como o shift lock) e desliga o giro automático
+	local function applyFacing()
+		local char = player.Character
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		local hrp = char and char:FindFirstChild("HumanoidRootPart")
+		local cam = workspace.CurrentCamera
+		if not (hum and hrp and cam) then return end
+		hum.AutoRotate = false
+		local look = cam.CFrame.LookVector
+		local yaw = math.atan2(-look.X, -look.Z)
+		hrp.CFrame = CFrame.new(hrp.Position) * CFrame.Angles(0, yaw, 0)
+	end
+
+	local function setLockFacing(on)
+		lockFacing = on
+		tween(shiftBtn, 0.15, { BackgroundTransparency = on and 0.35 or 0.7 })
+		shiftStroke.Thickness = on and 2 or (btnLocked and 1 or 0)
+		if on then
+			if facingConn then facingConn:Disconnect() end
+			facingConn = RunService.RenderStepped:Connect(applyFacing)
+		else
+			if facingConn then facingConn:Disconnect() facingConn = nil end
+			local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+			if hum then hum.AutoRotate = true end
+		end
+	end
+
+	-- arraste livre pela tela; segurar 1s sem mover trava (ou destrava) a posição do botão
+	local sbDragging, sbStart, sbMoved, sbHoldTok = false, Vector2.zero, false, 0
+	shiftBtn.InputBegan:Connect(function(input)
+		if not isPress(input) then return end
+		sbDragging = not btnLocked
+		sbStart = input.Position
+		sbMoved = false
+		sbHoldTok += 1
+		local mine = sbHoldTok
+		task.delay(1, function()
+			if mine ~= sbHoldTok or sbMoved then return end
+			btnLocked = not btnLocked
+			sbDragging = false
+			shiftStroke.Thickness = lockFacing and 2 or (btnLocked and 1 or 0)
+			local old = shiftBtn.BackgroundColor3
+			shiftBtn.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+			task.delay(0.12, function()
+				if shiftBtn.Parent then shiftBtn.BackgroundColor3 = old end
+			end)
 		end)
 	end)
-end)
-UIS.InputChanged:Connect(function(input)
-	if not sbDragging then return end
-	if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-		local d = input.Position - sbStart
-		if d.Magnitude > 6 then sbMoved = true end
-		if sbMoved then
-			local screen = gui.AbsoluteSize
-			local px = math.clamp(input.Position.X, SB / 2, math.max(SB / 2, screen.X - SB / 2))
-			local py = math.clamp(input.Position.Y, SB / 2, math.max(SB / 2, screen.Y - SB / 2))
-			shiftBtn.Position = UDim2.fromOffset(px, py)
+	UIS.InputChanged:Connect(function(input)
+		if not sbDragging then return end
+		if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+			local d = input.Position - sbStart
+			if d.Magnitude > 6 then sbMoved = true end
+			if sbMoved then
+				local screen = gui.AbsoluteSize
+				local px = math.clamp(input.Position.X, SB / 2, math.max(SB / 2, screen.X - SB / 2))
+				local py = math.clamp(input.Position.Y, SB / 2, math.max(SB / 2, screen.Y - SB / 2))
+				shiftBtn.Position = UDim2.fromOffset(px, py)
+			end
 		end
-	end
-end)
-UIS.InputEnded:Connect(function(input)
-	if not (isPress(input) and sbDragging) then return end
-	sbDragging = false
-	sbHoldTok += 1 -- cancela o "segurar 1s" (já soltei antes de completar)
-	if not sbMoved then
-		setLockFacing(not lockFacing) -- toque curto: liga/desliga a trava de direção
-	end
-end)
+	end)
+	UIS.InputEnded:Connect(function(input)
+		if not (isPress(input) and sbDragging) then return end
+		sbDragging = false
+		sbHoldTok += 1 -- cancela o "segurar 1s" (já soltei antes de completar)
+		if not sbMoved then
+			setLockFacing(not lockFacing) -- toque curto: liga/desliga a trava de direção
+		end
+	end)
 
-local function setShiftLockFeature(on)
-	shiftGui.Enabled = on
-	if not on then setLockFacing(false) end
+	function setShiftLockFeature(on)
+		shiftGui.Enabled = on
+		if not on then setLockFacing(false) end
+	end
+
+	-- limpeza ao fechar o painel
+	conns.camCleanup = { Disconnect = function()
+		binocularsToggle(false)
+		setShiftLockFeature(false)
+		binOverlay:Destroy()
+		shiftGui:Destroy()
+	end }
 end
-
--- limpeza ao fechar o painel
-conns.camCleanup = { Disconnect = function()
-	binocularsToggle(false)
-	setShiftLockFeature(false)
-	binOverlay:Destroy()
-	shiftGui:Destroy()
-end }
 
 -- ===== ABA COMPORTAMENTO =====
 do
