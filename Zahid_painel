@@ -1,4 +1,4 @@
--- ===== ZAHID PAINEL 1.17 =====
+-- ===== ZAHID PAINEL 1.18 =====
 -- Painel com abas (Comportamento, Jogadores, Server, Updates e Configurações), tema escuro/claro e sons nos botões.
 -- Para registrar uma versão nova no histórico, acrescente uma entrada no topo da lista UPDATES (aba Updates).
 
@@ -10,7 +10,7 @@ local TeleportService = game:GetService("TeleportService")
 local HttpService = game:GetService("HttpService")
 local player = Players.LocalPlayer
 
-local VERSION = "1.17"
+local VERSION = "1.18"
 
 -- já existe um menu aberto? então não abre outro: mostra um aviso e destaca o menu que já está na tela
 do
@@ -1570,6 +1570,7 @@ local TABS = {
 	{ id = "comportamento", label = "Comportamento" },
 	{ id = "jogadores", label = "Jogadores" },
 	{ id = "server", label = "Server" },
+	{ id = "fun", label = "Fun" },
 	{ id = "updates", label = "Updates" },
 	{ id = "config", label = "Configurações" },
 }
@@ -1746,18 +1747,10 @@ do
 	local zoomT = 0            -- 0 = sem zoom (fov normal) .. 1 = zoom máximo
 	local ZOOM_FOV_MIN = 12
 	local activeFov = config.fov
-    local UserGameSettings = UserSettings():GetService("UserGameSettings")
-    local baseMouseSens = UserGameSettings.MouseSensitivity
 
-    local function recomputeFov()
-    	activeFov = binocularsEquipped and (config.fov - (config.fov - ZOOM_FOV_MIN) * zoomT) or config.fov
-    	-- sensibilidade proporcional ao zoom (1 = normal, menor = mais lento)
-    	local ratio = math.tan(math.rad(activeFov / 2)) / math.tan(math.rad(config.fov / 2))
-    	ratio = math.clamp(ratio, 0.05, 1)
-    	pcall(function()
-    		UserGameSettings.MouseSensitivity = baseMouseSens * ratio
-    	end)
-    end
+	local function recomputeFov()
+		activeFov = binocularsEquipped and (config.fov - (config.fov - ZOOM_FOV_MIN) * zoomT) or config.fov
+	end
 
 	-- aplica o FOV o tempo todo (some do close/toggles: fica sempre ligado, igual ao botão do menu)
 	conns.fovLoop = RunService.RenderStepped:Connect(function()
@@ -2817,9 +2810,544 @@ do
 	end
 end
 
+-- ===== ABA FUN: ANGRY BIRD (gravidade + arremesso estilo estilingue) =====
+-- "angry bird" (interruptor): abre um mini menu independente, que fica aberto enquanto o interruptor
+-- estiver ligado. Nele: uma barra de gravidade (0-100, com "padrão" para voltar ao normal) e, do lado
+-- direito da tela, uma barra de força (estilo taco de sinuca: arraste para baixo para carregar, solte
+-- para arremessar). No modo livre, soltar a barra de força já arremessa na direção da câmera. Com
+-- "escolher destino" ligado, arrastar só guarda a força (sem arremessar) e um toque no cenário escolhe
+-- o destino; o código calcula o ângulo necessário e mostra a linha de mira (azul = alcançável com a
+-- força e a gravidade atuais, vermelha = não dá, com uma sugestão de força/gravidade para chegar lá).
+local angryBirdToggle
+do
+	local function build()
+		local GRAV_MIN, GRAV_MAX = 0, 100
+		local FORCE_MAX = 160       -- studs/s no fim da barra de força
+		local FORCE_TRACK_H = 220
+		local AIM_POINTS = 50
+		local AIM_TIME_STEP = 0.08
+		local LAUNCH_TIMEOUT = 8    -- segundos: se não detectar pouso até lá, levanta de qualquer forma
+		local RED = Color3.fromRGB(255, 90, 90)
+		local BLUE = Color3.fromRGB(80, 210, 255)
+
+		local originalGravity = workspace.Gravity
+		local on = false
+		local destinoMode = false
+		local destinoPoint = nil
+		local force = 0              -- 0..FORCE_MAX (carregado pela barra lateral)
+		local launchToken = 0
+		local connList = {}
+
+		local funRayParams = RaycastParams.new()
+		funRayParams.FilterType = Enum.RaycastFilterType.Exclude
+
+		local function myParts()
+			local ex = {}
+			if player.Character then table.insert(ex, player.Character) end
+			if floatPart then table.insert(ex, floatPart) end
+			return ex
+		end
+
+		-- ===== matemática do arremesso =====
+		-- ângulo (rad) que acerta (dx, dy) com velocidade v e gravidade g; nil se não alcança
+		local function solveAngle(v, g, dx, dy)
+			dx = math.max(dx, 0.5)
+			local disc = v ^ 4 - g * (g * dx * dx + 2 * dy * v * v)
+			if disc < 0 then return nil end
+			local tgt = (v * v - math.sqrt(disc)) / (g * dx)
+			return math.atan(tgt)
+		end
+		-- menor força que alcança (dx, dy) com a gravidade g
+		local function minForce(g, dx, dy)
+			local dist = math.sqrt(dx * dx + dy * dy)
+			return math.sqrt(math.max(g * (dist + dy), 0))
+		end
+		-- maior gravidade com que a força v ainda alcança (dx, dy)
+		local function maxGravity(v, dx, dy)
+			dx = math.max(dx, 0.5)
+			local a, b, c = dx * dx, 2 * dy * v * v, -(v ^ 4)
+			local disc = b * b - 4 * a * c
+			if disc < 0 then return nil end
+			local g1 = (-b + math.sqrt(disc)) / (2 * a)
+			return g1 > 0 and g1 or nil
+		end
+
+		-- ===== linha de mira (parábola) =====
+		local aimFolder, aimSegs, aimEnd
+		local function destroyAim()
+			if aimFolder then aimFolder:Destroy() end
+			aimFolder, aimSegs, aimEnd = nil, nil, nil
+		end
+		local function createAim()
+			destroyAim()
+			aimFolder = Instance.new("Folder")
+			aimFolder.Name = "AngryBirdMira"
+			aimFolder.Parent = workspace
+			aimSegs = {}
+			local function newPart(shape, size)
+				local p = Instance.new("Part")
+				p.Anchored = true
+				p.CanCollide = false
+				p.CanQuery = false
+				p.CanTouch = false
+				p.CastShadow = false
+				p.Material = Enum.Material.Neon
+				p.Shape = shape
+				p.Size = size
+				p.Transparency = 1
+				p.Parent = aimFolder
+				return p
+			end
+			for i = 1, AIM_POINTS do
+				aimSegs[i] = newPart(Enum.PartType.Block, Vector3.new(0.18, 0.18, 1))
+			end
+			aimEnd = newPart(Enum.PartType.Ball, Vector3.new(0.9, 0.9, 0.9))
+		end
+
+		local function hideAim()
+			if not aimFolder then return end
+			for i = 1, AIM_POINTS do aimSegs[i].Transparency = 1 end
+			aimEnd.Transparency = 1
+		end
+
+		-- desenha a parábola de start até start+v0*t+0.5*g*t^2; devolve o ponto final e se bateu em algo
+		local function drawAim(start, v0, g, color)
+			if not aimFolder then return start, false end
+			funRayParams.FilterDescendantsInstances = myParts()
+			local grav = Vector3.new(0, -g, 0)
+			local prev = start
+			local used = 0
+			local hitSomething = false
+			for i = 1, AIM_POINTS do
+				local t = i * AIM_TIME_STEP
+				local pt = start + v0 * t + 0.5 * grav * t * t
+				used = i
+				local delta = pt - prev
+				local finish = pt
+				local stop = false
+				if delta.Magnitude > 0.01 then
+					local hit = workspace:Raycast(prev, delta, funRayParams)
+					if hit then finish, stop, hitSomething = hit.Position, true, true end
+				end
+				local seg = aimSegs[i]
+				local l = (finish - prev).Magnitude
+				if l > 0.01 then
+					seg.Size = Vector3.new(0.18, 0.18, l)
+					seg.CFrame = CFrame.lookAt((prev + finish) / 2, finish)
+					seg.Color = color
+					seg.Transparency = 0.15
+				else
+					seg.Transparency = 1
+				end
+				prev = finish
+				if stop then break end
+			end
+			for i = used + 1, AIM_POINTS do aimSegs[i].Transparency = 1 end
+			aimEnd.CFrame = CFrame.new(prev)
+			aimEnd.Color = color
+			aimEnd.Transparency = 0.1
+			return prev, hitSomething
+		end
+
+		local function getRoot()
+			return player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+		end
+		local setForceKnobY -- definida junto da barra de força, mais abaixo
+
+		-- ===== ragdoll (estilo "trip") + arremesso =====
+		local function doLaunch(v0)
+			local char = player.Character
+			local hum = char and char:FindFirstChildOfClass("Humanoid")
+			local hrp = char and char:FindFirstChild("HumanoidRootPart")
+			if not (hum and hrp) then return end
+
+			-- o Anti Part Fling bloqueia o estado de queda/ragdoll: reabilita por enquanto
+			local apfWas = apfActive
+			if apfWas then toggles["Anti Part Fling"](false) end
+
+			hum.PlatformStand = true
+			hrp.AssemblyLinearVelocity = v0
+			hrp.AssemblyAngularVelocity = Vector3.new(
+				math.random(-10, 10), math.random(-10, 10), math.random(-10, 10))
+
+			launchToken += 1
+			local token = launchToken
+			task.spawn(function()
+				local t0 = os.clock()
+				task.wait(0.3) -- tempo mínimo no ar, pra não detectar "pouso" saindo do chão
+				while token == launchToken and hrp.Parent and os.clock() - t0 < LAUNCH_TIMEOUT do
+					RunService.Heartbeat:Wait()
+					funRayParams.FilterDescendantsInstances = myParts() -- ignora o próprio corpo
+					local hit = workspace:Raycast(hrp.Position, Vector3.new(0, -4, 0), funRayParams)
+					if hit and hrp.AssemblyLinearVelocity.Magnitude < 14 then break end
+				end
+				if token ~= launchToken then return end
+				if hrp.Parent then
+					-- levanta de pé onde caiu (sai do "ragdoll")
+					local look = hrp.CFrame.LookVector
+					local yaw = math.atan2(-look.X, -look.Z)
+					hrp.CFrame = CFrame.new(hrp.Position + Vector3.new(0, 2.5, 0)) * CFrame.Angles(0, yaw, 0)
+					hrp.AssemblyLinearVelocity = Vector3.zero
+					hrp.AssemblyAngularVelocity = Vector3.zero
+					hum.PlatformStand = false
+					hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+				end
+				if apfWas then toggles["Anti Part Fling"](true) end
+			end)
+		end
+
+		-- ===== janela (mini menu independente) =====
+		local FUN_W, FUN_H = math.min(260, viewport.X - 16), 200
+		local funMenu = mkWindowFrame(gui)
+		funMenu.Name = "AngryBird"
+		funMenu.Size = UDim2.fromOffset(FUN_W, FUN_H)
+		funMenu.Position = UDim2.fromOffset(math.max(10, viewport.X - FUN_W - 70), math.max(10, (viewport.Y - FUN_H - 64) / 2))
+		funMenu.Visible = false
+		local funScale = Instance.new("UIScale")
+		funScale.Parent = funMenu
+
+		local funTitle = mkLabel(funMenu, "Angry Bird", 14, "text")
+		funTitle.Font = FONT_BOLD
+		funTitle.Position = UDim2.fromOffset(10, 8)
+		funTitle.Size = UDim2.new(1, -20, 0, 18)
+
+		-- arrastar o mini menu pela barra do título
+		local dragBar = Instance.new("Frame")
+		dragBar.BackgroundTransparency = 1
+		dragBar.Size = UDim2.new(1, 0, 0, 28)
+		dragBar.Active = true
+		dragBar.Parent = funMenu
+		local fdrag, fstart, fpos = false, Vector2.zero, UDim2.new()
+		dragBar.InputBegan:Connect(function(input)
+			if isPress(input) then
+				fdrag, fstart, fpos = true, input.Position, funMenu.Position
+			end
+		end)
+
+		local gravLabel = mkLabel(funMenu, "", 12, "textDim")
+		gravLabel.Position = UDim2.fromOffset(10, 30)
+		gravLabel.Size = UDim2.new(1, -20, 0, 16)
+
+		local gravTrack = mkPanel(funMenu, "field", 8)
+		gravTrack.Position = UDim2.fromOffset(10, 50)
+		gravTrack.Size = UDim2.new(1, -20, 0, 20)
+		gravTrack.Active = true
+		local gravBar = Instance.new("Frame")
+		gravBar.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+		gravBar.BackgroundTransparency = 0.7
+		gravBar.BorderSizePixel = 0
+		gravBar.Size = UDim2.new(1, -6, 1, -6)
+		gravBar.Position = UDim2.fromOffset(3, 3)
+		gravBar.Parent = gravTrack
+		Instance.new("UICorner", gravBar).CornerRadius = UDim.new(1, 0)
+		local gravKnob = Instance.new("Frame")
+		gravKnob.AnchorPoint = Vector2.new(0.5, 0.5)
+		gravKnob.Size = UDim2.fromOffset(18, 18)
+		gravKnob.BackgroundColor3 = T.faceHelp
+		gravKnob.BorderSizePixel = 0
+		gravKnob.Active = true
+		gravKnob.Parent = gravTrack
+		Instance.new("UICorner", gravKnob).CornerRadius = UDim.new(1, 0)
+
+		local function refreshGravLabel()
+			gravLabel.Text = string.format("Gravidade: %d", math.floor(workspace.Gravity + 0.5))
+			-- o botão acompanha o valor (acima de 100 = padrão do jogo, fica no fim da barra)
+			local a = math.clamp((workspace.Gravity - GRAV_MIN) / (GRAV_MAX - GRAV_MIN), 0, 1)
+			gravKnob.Position = UDim2.new(a, 0, 0.5, 0)
+		end
+		local function setGravity(g)
+			g = math.clamp(g, GRAV_MIN, GRAV_MAX)
+			workspace.Gravity = g
+			refreshGravLabel()
+		end
+		local gravDragging = false
+		local function gravFromX(x)
+			local a = math.clamp((x - gravTrack.AbsolutePosition.X) / gravTrack.AbsoluteSize.X, 0, 1)
+			setGravity(GRAV_MIN + a * (GRAV_MAX - GRAV_MIN))
+		end
+		local function gravDragStart(input)
+			if isPress(input) then
+				gravDragging = true
+				gravFromX(input.Position.X)
+			end
+		end
+		gravTrack.InputBegan:Connect(gravDragStart)
+		gravKnob.InputBegan:Connect(gravDragStart)
+
+		local defaultBtn = new3DButton(funMenu, "padrão", UDim2.fromOffset(10, 78), UDim2.new(1, -20, 0, 30), "Off")
+		defaultBtn.face.Activated:Connect(function()
+			workspace.Gravity = originalGravity
+			refreshGravLabel()
+		end)
+
+		local destBtn = new3DButton(funMenu, "escolher destino", UDim2.fromOffset(10, 114), UDim2.new(1, -20, 0, 30), "Off")
+		destBtn.face.TextTruncate = Enum.TextTruncate.AtEnd
+		local launchBtn = new3DButton(funMenu, "lançar", UDim2.fromOffset(10, 150), UDim2.new(1, -20, 0, 30), "Net")
+
+		local statusLabel = mkLabel(funMenu, "", 11, "textDim")
+		statusLabel.Position = UDim2.fromOffset(10, 184)
+		statusLabel.Size = UDim2.new(1, -20, 0, 32)
+
+		-- aviso de sugestão (gravidade/força) com Sim/Não
+		local suggestFrame = Instance.new("Frame")
+		suggestFrame.BackgroundTransparency = 1
+		suggestFrame.Position = UDim2.fromOffset(10, 184)
+		suggestFrame.Size = UDim2.new(1, -20, 0, 64)
+		suggestFrame.Visible = false
+		suggestFrame.Parent = funMenu
+		local suggestText = mkLabel(suggestFrame, "", 11, "warn")
+		suggestText.Size = UDim2.new(1, 0, 0, 34)
+		local suggestYes = new3DButton(suggestFrame, "sim", UDim2.fromOffset(0, 36), UDim2.new(0.5, -3, 0, 26), "Net")
+		local suggestNo = new3DButton(suggestFrame, "não", UDim2.new(0.5, 3, 0, 36), UDim2.new(0.5, -3, 0, 26), "Off")
+		funMenu.Size = UDim2.fromOffset(FUN_W, FUN_H + 64)
+
+		local suggestedForce, suggestedGrav = nil, nil
+		local function hideSuggest()
+			suggestFrame.Visible = false
+			statusLabel.Visible = true
+		end
+		local function showSuggest(fSug, gSug)
+			suggestedForce, suggestedGrav = fSug, gSug
+			statusLabel.Visible = false
+			suggestFrame.Visible = true
+			if gSug then
+				suggestText.Text = string.format("Não alcança. Sugestão: força %d e gravidade %d. Usar?", math.floor(fSug), math.floor(gSug))
+			else
+				suggestText.Text = string.format("Não alcança. Sugestão: força %d. Usar?", math.floor(fSug))
+			end
+		end
+		suggestYes.face.Activated:Connect(function()
+			if suggestedGrav then setGravity(suggestedGrav) end
+			if suggestedForce then
+				force = math.clamp(suggestedForce, 0, FORCE_MAX)
+				setForceKnobY(force / FORCE_MAX) -- a barra de força acompanha a sugestão
+			end
+			hideSuggest()
+		end)
+		suggestNo.face.Activated:Connect(hideSuggest)
+
+		-- ===== barra de força (lado direito da tela, estilo taco de sinuca) =====
+		local forceTrack = Instance.new("Frame")
+		forceTrack.AnchorPoint = Vector2.new(1, 0.5)
+		forceTrack.Position = UDim2.new(1, -18, 0.5, 0)
+		forceTrack.Size = UDim2.fromOffset(10, FORCE_TRACK_H)
+		forceTrack.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+		forceTrack.BackgroundTransparency = 0.75
+		forceTrack.BorderSizePixel = 0
+		forceTrack.Visible = false
+		forceTrack.Parent = gui
+		Instance.new("UICorner", forceTrack).CornerRadius = UDim.new(1, 0)
+		local forceKnob = Instance.new("Frame")
+		forceKnob.AnchorPoint = Vector2.new(0.5, 0.5)
+		forceKnob.Size = UDim2.fromOffset(34, 34)
+		forceKnob.Position = UDim2.new(0.5, 0, 0, 0)
+		forceKnob.BackgroundColor3 = Color3.fromRGB(255, 160, 60)
+		forceKnob.BorderSizePixel = 0
+		forceKnob.Active = true
+		forceKnob.Parent = forceTrack
+		Instance.new("UICorner", forceKnob).CornerRadius = UDim.new(1, 0)
+
+		-- direção atual do lance: para onde a câmera olha
+		local function aimDir()
+			return workspace.CurrentCamera.CFrame.LookVector
+		end
+
+		-- atualiza a linha: destino (se escolhido) ou o alcance livre, com a força/gravidade atuais
+		local function updateAim()
+			local hrp = getRoot()
+			if not hrp or not aimFolder then return end
+			local g = workspace.Gravity
+			local dir = aimDir()
+			local start = hrp.Position
+
+			if statusLabel.Visible then
+				statusLabel.Text = string.format("Força: %d | %s", math.floor(force + 0.5),
+					destinoMode and (destinoPoint and "destino escolhido" or "toque no cenário para escolher o destino")
+					or "puxe a barra da direita e solte para arremessar")
+			end
+			if not (destinoMode and destinoPoint) and force < 2 then
+				hideAim() -- nada para mostrar ainda
+				return
+			end
+
+			if destinoMode and destinoPoint then
+				local diff = destinoPoint - start
+				local flat = Vector3.new(diff.X, 0, diff.Z)
+				local dx, dy = flat.Magnitude, diff.Y
+				local ang = solveAngle(math.max(force, 1), g, dx, dy)
+				if ang then
+					local flatDir = flat.Magnitude > 0.1 and flat.Unit or Vector3.new(dir.X, 0, dir.Z).Unit
+					local v0 = (flatDir * math.cos(ang) + Vector3.new(0, 1, 0) * math.sin(ang)) * force
+					drawAim(start, v0, g, BLUE)
+					hideSuggest()
+				else
+					drawAim(start, dir * force, g, RED)
+					local fSug = minForce(g, dx, dy)
+					if fSug <= FORCE_MAX then
+						showSuggest(fSug, nil)
+					else
+						local gSug = maxGravity(FORCE_MAX, dx, dy)
+						showSuggest(FORCE_MAX, gSug and math.clamp(gSug, GRAV_MIN, GRAV_MAX) or GRAV_MAX)
+					end
+				end
+			else
+				drawAim(start, dir * force, g, BLUE)
+			end
+		end
+
+		function setForceKnobY(a)
+			forceKnob.Position = UDim2.new(0.5, 0, a, 0)
+		end
+		local function forceFromY(y)
+			local a = math.clamp((y - forceTrack.AbsolutePosition.Y) / forceTrack.AbsoluteSize.Y, 0, 1)
+			force = a * FORCE_MAX
+			setForceKnobY(a)
+			updateAim()
+		end
+
+		local forceDragging = false
+		local function forceDragStart(input)
+			if isPress(input) then
+				forceDragging = true
+				forceFromY(input.Position.Y)
+			end
+		end
+		forceTrack.InputBegan:Connect(forceDragStart)
+		forceKnob.InputBegan:Connect(forceDragStart)
+
+		table.insert(connList, UIS.InputChanged:Connect(function(input)
+			if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then return end
+			if fdrag then
+				local d = input.Position - fstart
+				local screen = gui.AbsoluteSize
+				local nx = math.clamp(fpos.X.Offset + d.X, 0, math.max(0, screen.X - FUN_W))
+				local ny = math.clamp(fpos.Y.Offset + d.Y, 0, math.max(0, screen.Y - FUN_H - 64))
+				funMenu.Position = UDim2.fromOffset(nx, ny)
+			end
+			if gravDragging then gravFromX(input.Position.X) end
+			if forceDragging then forceFromY(input.Position.Y) end
+		end))
+		table.insert(connList, UIS.InputEnded:Connect(function(input)
+			if not isPress(input) then return end
+			fdrag = false
+			gravDragging = false
+			if forceDragging then
+				forceDragging = false
+				if not destinoMode then
+					-- modo livre: soltar a barra já arremessa, na direção da câmera, com ragdoll
+					local hrp = getRoot()
+					if hrp and force > 2 then
+						doLaunch(aimDir() * force)
+					end
+					force = 0
+					tween(forceKnob, 0.25, { Position = UDim2.new(0.5, 0, 0, 0) }, Enum.EasingStyle.Back)
+				else
+					updateAim() -- modo destino: só guarda a força, não arremessa
+				end
+			end
+		end))
+
+		-- toque no cenário escolhe o destino (só com "escolher destino" ligado)
+		table.insert(connList, UIS.InputBegan:Connect(function(input, gp)
+			if gp or not on or not destinoMode or not isPress(input) then return end
+			local cam = workspace.CurrentCamera
+			local ray = cam:ScreenPointToRay(input.Position.X, input.Position.Y)
+			funRayParams.FilterDescendantsInstances = myParts()
+			local hit = workspace:Raycast(ray.Origin, ray.Direction * 2000, funRayParams)
+			if hit then
+				destinoPoint = hit.Position
+				updateAim()
+			end
+		end))
+
+		destBtn.face.Activated:Connect(function()
+			destinoMode = not destinoMode
+			destBtn.setOn(destinoMode)
+			launchBtn.holder.Visible = destinoMode
+			if not destinoMode then
+				destinoPoint = nil
+				hideSuggest()
+			end
+		end)
+
+		launchBtn.face.Activated:Connect(function()
+			local hrp = getRoot()
+			if not hrp or not destinoPoint or force <= 2 then
+				flashText(launchBtn.face, "escolha destino e força", "bad")
+				return
+			end
+			local g = workspace.Gravity
+			local diff = destinoPoint - hrp.Position
+			local flat = Vector3.new(diff.X, 0, diff.Z)
+			local ang = solveAngle(force, g, flat.Magnitude, diff.Y)
+			if not ang then
+				flashText(launchBtn.face, "destino fora de alcance", "bad")
+				return
+			end
+			local flatDir = flat.Magnitude > 0.1 and flat.Unit or aimDir()
+			local v0 = (flatDir * math.cos(ang) + Vector3.new(0, 1, 0) * math.sin(ang)) * force
+			doLaunch(v0)
+			destinoPoint = nil
+			force = 0
+			setForceKnobY(0)
+		end)
+
+		table.insert(connList, RunService.Heartbeat:Connect(function()
+			if not on then return end
+			updateAim()
+		end))
+
+		angryBirdToggle = function(enable)
+			on = enable
+			funMenu.Visible = enable
+			forceTrack.Visible = enable
+			launchBtn.holder.Visible = enable and destinoMode
+			if enable then
+				funScale.Scale = 0.85
+				tween(funScale, 0.25, { Scale = 1 }, Enum.EasingStyle.Back)
+				createAim()
+				refreshGravLabel()
+				setForceKnobY(0)
+			else
+				destroyAim()
+				destinoMode, destinoPoint, force = false, nil, 0
+				destBtn.setOn(false)
+				hideSuggest()
+				workspace.Gravity = originalGravity -- sem o mini menu, a gravidade volta ao normal
+			end
+		end
+
+		conns.funCleanup = { Disconnect = function()
+			angryBirdToggle(false)
+			for _, c in ipairs(connList) do c:Disconnect() end
+			workspace.Gravity = originalGravity
+			funMenu:Destroy()
+			forceTrack:Destroy()
+		end }
+	end
+	build()
+end
+
+do
+	local page = pages.fun
+	addToggle(page, "AngryBird", "angry bird", "Abre um mini menu: barra de gravidade e, do lado direito da tela, a barra de força para arremessar o personagem (estilo estilingue/taco de sinuca).", angryBirdToggle)
+end
+
 -- ===== ABA UPDATES (versão atual e histórico) =====
 -- Para registrar uma versão nova: acrescente uma entrada no TOPO da lista UPDATES (as antigas continuam abaixo).
 local UPDATES = {
+	{
+		version = "1.18",
+		date = "06/11/2026",
+		added = {
+			"Nova aba Fun, com o interruptor \"angry bird\"",
+			"Angry bird: mini menu independente (arrastável pelo título) com barra de gravidade (0 a 100) e botão \"padrão\" para voltar ao normal",
+			"Barra de força na lateral direita (estilo taco de sinuca): puxe para baixo e solte para arremessar o personagem, que gira no ar e levanta de pé ao pousar",
+			"Escolher destino: toque no cenário, o código calcula o ângulo e mostra a linha de mira (azul = alcança, vermelha = não alcança, com sugestão de força e gravidade)",
+		},
+		changed = {},
+		removed = {},
+	},
 	{
 		version = "1.17",
 		date = "01/11/2026",
