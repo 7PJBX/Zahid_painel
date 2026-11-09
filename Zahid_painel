@@ -1,4 +1,4 @@
-﻿-- ===== ZAHID PAINEL 1.19 =====
+-- ===== ZAHID PAINEL 1.19 =====
 -- Painel com abas (Comportamento, Jogadores, Server, Updates e Configurações), tema escuro/claro e sons nos botões.
 -- Para registrar uma versão nova no histórico, acrescente uma entrada no topo da lista UPDATES (aba Updates).
 
@@ -108,8 +108,10 @@ local function saveConfig()
 end
 
 -- ===== ANTIFLING =====
+local CORE_PARTS, antiFling
+do
 local antiFlingSaved = {} -- [part] = CanCollide original
-local CORE_PARTS = { HumanoidRootPart = true, Head = true, Torso = true, UpperTorso = true, LowerTorso = true }
+CORE_PARTS = { HumanoidRootPart = true, Head = true, Torso = true, UpperTorso = true, LowerTorso = true }
 
 -- devolve a colisão dos outros jogadores
 local function restoreCollisions()
@@ -132,7 +134,7 @@ local function restoreCollisions()
 	end
 end
 
-local function antiFling(on)
+function antiFling(on)
 	if conns.antifling then conns.antifling:Disconnect() conns.antifling = nil end
 	if conns.antiflingRestore then conns.antiflingRestore:Disconnect() conns.antiflingRestore = nil end
 
@@ -174,8 +176,11 @@ local function antiFling(on)
 		end
 	end)
 end
+end
 
 -- ===== TPTOOL (clica no chão e teleporta) =====
+local tpTool
+do
 local tpEnabled = false
 local function giveTpTool()
 	local backpack = player:FindFirstChildOfClass("Backpack")
@@ -202,7 +207,7 @@ local function removeTpTool()
 	end
 end
 
-local function tpTool(on)
+function tpTool(on)
 	tpEnabled = on
 	if on then giveTpTool() else removeTpTool() end
 end
@@ -213,8 +218,11 @@ player.CharacterAdded:Connect(function()
 		giveTpTool()
 	end
 end)
+end
 
 -- ===== FLY / VFLY =====
+local fly, vfly
+do
 local FLY_SPEED = 60
 
 local function stopFlight(key)
@@ -283,12 +291,13 @@ local function startFlight(key, needSeat)
 	end)
 end
 
-local function fly(on)
+function fly(on)
 	if on then startFlight("fly", false) else stopFlight("fly") end
 end
 
-local function vfly(on)
+function vfly(on)
 	if on then startFlight("vfly", true) else stopFlight("vfly") end
+end
 end
 
 -- ===== FLOAT (plataforma invisível sob os pés; Q desce / E sobe) =====
@@ -414,10 +423,12 @@ local function respawnHere(onDone)
 end
 
 -- ===== REJOIN / SERVER HOP =====
-local netBusy = false
+local netBusy, rejoinServer, httpGetBody, serverHop
+do
+netBusy = false
 
 -- volta para o mesmo servidor
-local function rejoinServer()
+function rejoinServer()
 	if #Players:GetPlayers() <= 1 then
 		-- sozinho: o servidor fecha quando você sai, então entra em um novo
 		player:Kick("\nReentrando no jogo...")
@@ -431,7 +442,7 @@ local function rejoinServer()
 end
 
 -- faz a requisição HTTP (usa o que o executor oferecer)
-local function httpGetBody(url)
+function httpGetBody(url)
 	local reqFn = request or http_request or (syn and syn.request)
 	if reqFn then
 		local ok, res = pcall(reqFn, { Url = url, Method = "GET" })
@@ -477,7 +488,7 @@ local function findOtherServer()
 end
 
 -- entra em outro servidor; devolve true se o teleporte foi iniciado, ou false e o motivo
-local function serverHop()
+function serverHop()
 	local id = findOtherServer()
 	if not id then return false, "Sem servidor 6+" end
 	local ok = pcall(function()
@@ -486,8 +497,11 @@ local function serverHop()
 	if not ok then return false, "Falhou" end
 	return true
 end
+end
 
 -- ===== SERVIDOR ANTERIOR (botão "voltar") =====
+local backServer
+do
 -- Cada vez que o script abre em um servidor, o servidor em que ele estava antes (guardado no arquivo)
 -- vira o "último". O botão "voltar" teleporta para ele.
 local SERVERS_FILE = "ZahidPainel_servidores.json"
@@ -521,7 +535,7 @@ do
 end
 
 -- volta para o último servidor em que eu estava; devolve true se o teleporte foi iniciado, ou false e o motivo
-local function backServer()
+function backServer()
 	local s = serversState.last
 	if not s then return false, "Sem servidor anterior" end
 	local ok = pcall(function()
@@ -530,8 +544,11 @@ local function backServer()
 	if not ok then return false, "Falhou" end
 	return true
 end
+end
 
 -- ===== EXPLORAR SERVIDORES (dados) =====
+local fetchServers, tokenAvatarAsset
+do
 -- requisição com corpo (POST etc.); devolve o corpo da resposta ou nil
 local function httpRequestBody(method, url, body, headers)
 	local reqFn = request or http_request or (syn and syn.request)
@@ -552,7 +569,7 @@ end
 
 -- lista os servidores públicos do jogo atual (até maxPages de 100). Devolve a lista, se a internet do executor funcionou
 -- e, se deu erro, a mensagem. Cada item: { id, playing, maxPlayers, ping, fps, tokens }
-local function fetchServers(maxPages)
+function fetchServers(maxPages)
 	local list = {}
 	local cursor = nil
 	local reached = false
@@ -593,7 +610,7 @@ end
 -- foto (rosto) de um jogador de OUTRO servidor, pelo token anônimo que a API devolve.
 -- Precisa de requisição, writefile e getcustomasset do executor; devolve o caminho do asset ou nil
 local avatarCache = {} -- [token] = asset
-local function tokenAvatarAsset(token)
+function tokenAvatarAsset(token)
 	if avatarCache[token] ~= nil then return avatarCache[token] or nil end
 	avatarCache[token] = false
 	if not (writefile and getcustomasset) then return nil end
@@ -624,8 +641,11 @@ local function tokenAvatarAsset(token)
 	end
 	return nil
 end
+end
 
 -- ===== AUTO FARM: POSIÇÃO FIXA + USO CONTÍNUO + RECONEXÃO =====
+local FARM_ANTIFLING_ON_RELOG, farmOn, farmCFrame, farmRoot, farmSave, farmLoad, farmEnable
+do
 -- "Definir posição" guarda onde você está. "Auto farm" (ligado):
 --  * se o jogo te teleportar ou você morrer, volta para a posição definida;
 --  * usa a ferramenta da mão a cada 5 segundos (se não houver, equipa a do slot 2);
@@ -643,10 +663,10 @@ local SCRIPT_URL = "https://raw.githubusercontent.com/7PJBX/Zahid_painel/refs/he
 local USE_QUEUE = true                    -- false se o script já roda sozinho pela pasta autoexec
 local TELEPORT_JUMP = 15                  -- deslocamento em 1 frame (studs) que conta como teleporte
 local USE_INTERVAL = 5                    -- segundos entre cada uso da ferramenta
-local FARM_ANTIFLING_ON_RELOG = true   -- depois de relogar (queda de internet), já deixa o AntiFling ligado
+FARM_ANTIFLING_ON_RELOG = true   -- depois de relogar (queda de internet), já deixa o AntiFling ligado
 
-local farmOn = false
-local farmCFrame = nil       -- posição definida
+farmOn = false
+farmCFrame = nil       -- posição definida
 local farmToolName = nil     -- ferramenta que está sendo usada
 local farmLastPos = nil
 local farmLastReturn = 0
@@ -656,12 +676,12 @@ local farmGoToken = 0
 local farmQueued = false
 local farmReconnecting = false
 
-local function farmRoot()
+function farmRoot()
 	return player.Character and player.Character:FindFirstChild("HumanoidRootPart")
 end
 
 -- salva posição e estado em arquivo (se o executor tiver writefile)
-local function farmSave()
+function farmSave()
 	if not writefile then return end
 	local data = { placeId = game.PlaceId, active = farmOn }
 	if farmCFrame then data.cf = { farmCFrame:GetComponents() } end
@@ -670,7 +690,7 @@ local function farmSave()
 	end)
 end
 
-local function farmLoad()
+function farmLoad()
 	if not (readfile and isfile) then return nil end
 	local ok, data = pcall(function()
 		if not isfile(FARM_FILE) then return nil end
@@ -758,7 +778,7 @@ local function farmReconnect()
 	end)
 end
 
-local function farmEnable(on)
+function farmEnable(on)
 	for _, k in ipairs({ "farmHB", "farmChar", "farmErr1", "farmErr2", "farmIdle" }) do
 		if conns[k] then conns[k]:Disconnect() conns[k] = nil end
 	end
@@ -837,6 +857,7 @@ local function farmEnable(on)
 			vu:ClickButton2(Vector2.new())
 		end)
 	end)
+end
 end
 
 -- ===== ANTI PART FLING =====
@@ -1162,6 +1183,8 @@ local function isPress(input)
 end
 
 -- ===== SONS DOS BOTÕES (pop, retro e gota) =====
+local playSfx, loadSfx
+do
 -- Usa sons que já vêm no cliente do Roblox; cada som é feito de "camadas" (um arquivo tocado com altura que muda).
 -- Para cada camada o código testa os caminhos da lista e usa o primeiro que existir.
 --   pop   = estourar uma bolinha: um "estalo" curto + um "bloop" de altura descendo
@@ -1182,7 +1205,7 @@ local SFX_DEFS = {
 local SFX_ORDER = { "pop", "retro", "gota" }
 local sfxReady = {}    -- [nome] = lista de camadas prontas { sound, s0, s1, vol, dur, token }
 
-local function playSfx(name)
+function playSfx(name)
 	if not config.sound then return end
 	local layers = sfxReady[name or config.soundName]
 	if not layers then return end
@@ -1207,7 +1230,7 @@ local function playSfx(name)
 end
 
 -- carrega os sons em segundo plano (sem travar a abertura do menu)
-local function loadSfx(parent)
+function loadSfx(parent)
 	task.spawn(function()
 		for _, name in ipairs(SFX_ORDER) do
 			local ready = {}
@@ -1229,6 +1252,7 @@ local function loadSfx(parent)
 			if #ready > 0 then sfxReady[name] = ready end
 		end
 	end)
+end
 end
 
 -- ===== BOTÃO 3D =====
@@ -1418,10 +1442,12 @@ local function bindHold(btn, onDown, onUp)
 end
 
 -- ===== LINHA COM NOME E DESCRIÇÃO =====
+local addRow, loadAvatar
+do
 -- kind = "switch": estilo interruptor (a linha inteira é o botão). kind = "action": botão pequeno à direita.
 -- Devolve { frame, face, setOn, flash(texto, cor), setBase(texto), setName(texto), btn (só em "action") }.
 local ROW_CARD_H = 54
-local function addRow(page, name, desc, kind, btnText, role)
+function addRow(page, name, desc, kind, btnText, role)
 	local row = Instance.new("Frame")
 	row.BorderSizePixel = 0
 	row.Size = UDim2.new(1, 0, 0, ROW_CARD_H)
@@ -1528,7 +1554,7 @@ end
 
 -- foto do avatar (rosto): aparece na hora pelo endereço rbxthumb e é trocada pela miniatura oficial quando ela chega
 local thumbCache = {}
-local function loadAvatar(img, userId)
+function loadAvatar(img, userId)
 	img.Image = string.format("rbxthumb://type=AvatarHeadShot&id=%d&w=48&h=48", userId)
 	local cached = thumbCache[userId]
 	if cached then
@@ -1545,9 +1571,12 @@ local function loadAvatar(img, userId)
 		end
 	end)
 end
+end
 
 -- ===== JANELA PRINCIPAL =====
-local gui = Instance.new("ScreenGui")
+local gui, viewport, BUBBLE, MARGIN, bx, by, bubble, bubbleScale, winScale, minBtn, content, pages, tabBtns, showPage, windowOpen, winH, placeWindow, setWindow, minimized
+do
+gui = Instance.new("ScreenGui")
 gui.Name = "MiniMenu"
 gui.ResetOnSpawn = false
 gui.DisplayOrder = 20
@@ -1555,16 +1584,16 @@ gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling -- (explícito: as janelas por 
 gui.Parent = player:WaitForChild("PlayerGui")
 loadSfx(gui)
 
-local viewport = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(800, 400)
+viewport = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(800, 400)
 local WIN_W = math.min(372, viewport.X - 12)
 local WIN_H = math.min(292, viewport.Y - 12)
 local SIDE_W = 104
 
 -- botão redondo que abre o menu (pode ser arrastado, mas nunca fica fora da tela)
-local BUBBLE = 46
-local MARGIN = 4
-local bx, by = 12, 70
-local bubble = Instance.new("TextButton")
+BUBBLE = 46
+MARGIN = 4
+bx, by = 12, 70
+bubble = Instance.new("TextButton")
 bubble.Name = "Bubble"
 bubble.Size = UDim2.fromOffset(BUBBLE, BUBBLE)
 bubble.Position = UDim2.fromOffset(bx, by)
@@ -1578,7 +1607,7 @@ Instance.new("UICorner", bubble).CornerRadius = UDim.new(0, 14)
 local bubbleStroke = Instance.new("UIStroke")
 bubbleStroke.Thickness = 1.5
 bubbleStroke.Parent = bubble
-local bubbleScale = Instance.new("UIScale")
+bubbleScale = Instance.new("UIScale")
 bubbleScale.Scale = 0.01
 bubbleScale.Parent = bubble
 onTheme(function()
@@ -1592,7 +1621,7 @@ local window = mkWindowFrame(gui)
 window.Name = "Window"
 window.Size = UDim2.fromOffset(WIN_W, WIN_H)
 window.Visible = false
-local winScale = Instance.new("UIScale")
+winScale = Instance.new("UIScale")
 winScale.Parent = window
 
 local titleLabel = mkLabel(window, "Zahid painel", 15, "text")
@@ -1604,7 +1633,7 @@ verLabel.Position = UDim2.new(1, -118, 0, 9)
 verLabel.Size = UDim2.fromOffset(66, 16)
 
 -- botão de minimizar: recolhe a janela só para a barra do título (toque de novo para abrir)
-local minBtn = new3DButton(window, "-", UDim2.new(1, -46, 0, 4), UDim2.fromOffset(34, 28), "Off")
+minBtn = new3DButton(window, "-", UDim2.new(1, -46, 0, 4), UDim2.fromOffset(34, 28), "Off")
 minBtn.face.TextSize = 16
 
 local sidebar = Instance.new("Frame")
@@ -1613,7 +1642,7 @@ sidebar.Position = UDim2.fromOffset(8, 34)
 sidebar.Size = UDim2.new(0, SIDE_W, 1, -42)
 sidebar.Parent = window
 
-local content = Instance.new("Frame")
+content = Instance.new("Frame")
 content.Name = "Content"
 content.BackgroundTransparency = 1
 content.ClipsDescendants = true
@@ -1629,9 +1658,9 @@ local TABS = {
 	{ id = "updates", label = "Updates" },
 	{ id = "config", label = "Configurações" },
 }
-local pages, tabBtns = {}, {}
+pages, tabBtns = {}, {}
 
-local function showPage(id)
+function showPage(id)
 	for _, tab in ipairs(TABS) do
 		pages[tab.id].Visible = (tab.id == id)
 		tabBtns[tab.id].setOn(tab.id == id)
@@ -1653,9 +1682,9 @@ for i, tab in ipairs(TABS) do
 end
 
 -- onde a janela fica: logo abaixo do botão (ou acima, se não houver espaço), sempre dentro da tela
-local windowOpen = false
-local winH = WIN_H
-local function placeWindow()
+windowOpen = false
+winH = WIN_H
+function placeWindow()
 	local screen = gui.AbsoluteSize
 	local px, py = bubble.Position.X.Offset, bubble.Position.Y.Offset
 	local x = math.clamp(px, 6, math.max(6, screen.X - WIN_W - 6))
@@ -1665,7 +1694,7 @@ local function placeWindow()
 	window.Position = UDim2.fromOffset(x, y)
 end
 
-local function setWindow(open)
+function setWindow(open)
 	windowOpen = open
 	if open then
 		placeWindow()
@@ -1681,7 +1710,7 @@ local function setWindow(open)
 	bubble.TextColor3 = T.text
 end
 
-local minimized = false
+minimized = false
 local function setMinimized(v)
 	minimized = v
 	sidebar.Visible = not v
@@ -1692,8 +1721,10 @@ local function setMinimized(v)
 	if windowOpen then placeWindow() end
 end
 minBtn.face.Activated:Connect(function() setMinimized(not minimized) end)
+end
 
 -- ===== ARRASTAR O BOTÃO: não sai da tela; se passar da borda, volta com efeito mola =====
+do
 local dragging, dragInput, dragStart = false, nil, nil
 local startBx, startBy, moved = 0, 0, false
 
@@ -1767,6 +1798,7 @@ gui:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
 	tween(bubble, 0.5, { Position = UDim2.fromOffset(bx, by) }, Enum.EasingStyle.Elastic, Enum.EasingDirection.Out)
 	if windowOpen then placeWindow() end
 end)
+end
 
 -- ===== PEÇAS DAS ABAS =====
 local function section(page, text)
@@ -2155,7 +2187,9 @@ do
 end
 
 -- ===== ABA JOGADORES =====
-local themeRefreshers = {}   -- listas que precisam ser refeitas quando o tema muda
+local themeRefreshers
+do
+themeRefreshers = {}   -- listas que precisam ser refeitas quando o tema muda
 local selectedPlayer = nil
 local stopSpectate, startSpectate, spectating
 local helpOn = false
@@ -2552,6 +2586,7 @@ do
 	end, function()
 		helpFrearHeld = false -- soltou: volta a seguir o jogador
 	end)
+end
 end
 
 -- ===== ABA SERVER =====
