@@ -763,8 +763,8 @@ end
 end
 
 -- ===== ANTI PART FLING (refeito do zero) =====
--- Ligado: procura partes soltas do mapa que ficam muito rápidas por mais de 2 segundos seguidos; ao passar disso, tira a
--- colisão delas e deixa 50% transparentes. Também tira a colisão das minhas partes, por precaução. Uma informação pequena
+-- Ligado: procura partes soltas do mapa que ficam muito rápidas por mais de 0.2 segundo seguido; ao passar disso, tira a
+-- colisão delas e deixa 95% transparentes. Elas só voltam ao normal depois de ficarem paradas por 3 segundos. Também tira a colisão das minhas partes, por precaução. Uma informação pequena
 -- na tela mostra "detectando" e, depois dos 2 segundos, quantas partes foram detectadas e removidas.
 -- (usa CORE_PARTS, definido no bloco do AntiFling, para devolver a colisão ao desligar)
 local apfActive = false
@@ -777,10 +777,14 @@ do
 	local SCAN_RADIUS = 400    -- só olha as partes até essa distância de mim
 	local SCAN_EVERY = 0.05     -- segundos entre uma varredura e outra
 	local RESULT_SECONDS = 5   -- quanto tempo o resultado fica na tela
+	local STILL_SECONDS = 3    -- tempo parada para voltar ao normal
+	local STILL_LIN = 1        -- abaixo disso (studs/s) a parte conta como parada
+	local STILL_ANG = 0.5      -- abaixo disso (rad/s) a parte conta como parada
 
 	local mine = {}            -- [minha parte] = CanCollide original
 	local removed = {}         -- [parte] = { cc, tr } originais das partes já removidas
 	local since = {}           -- [parte] = quando começou a ficar rápida
+	local stillSince = {}      -- [parte] = quando começou a ficar parada (das já removidas)
 	local detectedSet = {}     -- partes já detectadas nesta ativação
 	local detectedN, removedN = 0, 0
 	local lastScan, resultUntil = 0, 0
@@ -836,7 +840,7 @@ do
 			end
 			removed[part] = nil
 		end
-		since, detectedSet = {}, {}
+		since, detectedSet, stillSince = {}, {}, {}
 		detectedN, removedN = 0, 0
 		if hudGui then hudGui:Destroy() hudGui, hudLabel = nil, nil end
 	end
@@ -873,6 +877,27 @@ do
 						removedNow = true
 					else
 						candidates += 1
+					end
+				end
+			end
+		end
+		-- partes removidas: só voltam ao normal depois de ficarem paradas por STILL_SECONDS
+		for part, o in pairs(removed) do
+			if not part.Parent then
+				removed[part] = nil
+				stillSince[part] = nil
+			else
+				local moving = part.AssemblyLinearVelocity.Magnitude > STILL_LIN
+					or part.AssemblyAngularVelocity.Magnitude > STILL_ANG
+				if moving then
+					stillSince[part] = nil
+				else
+					stillSince[part] = stillSince[part] or now
+					if now - stillSince[part] >= STILL_SECONDS then
+						part.CanCollide = o.cc
+						part.Transparency = o.tr
+						removed[part] = nil
+						stillSince[part] = nil
 					end
 				end
 			end
@@ -1907,7 +1932,7 @@ do
 
 	section(page, "Proteção")
 	addToggle(page, "AntiFling", "AntiFling", "Tira a colisão dos outros jogadores para ninguém te arremessar.", antiFling)
-	addToggle(page, "Anti Part Fling", "Anti Part Fling", "Detecta partes do mapa muito rápidas por mais de 2 s: tira a colisão delas (50% transparentes) e a das suas partes. Mostra um aviso pequeno na tela.", antiPartFling)
+	addToggle(page, "Anti Part Fling", "Anti Part Fling", "Detecta partes do mapa que se movem por 0.2 s ou mais: tira a colisão delas (95% transparentes) e a das suas partes. Elas voltam ao normal após 3 s paradas. Mostra um aviso pequeno na tela.", antiPartFling)
 
 	section(page, "Movimento")
 	addToggle(page, "VFly", "vfly", "Voo de veículo: sente em um assento antes de ligar.", vfly)
