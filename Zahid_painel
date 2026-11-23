@@ -771,13 +771,13 @@ local apfActive = false
 local antiPartFling
 do
 
-	local FAST_LIN = 20       -- studs/s
+	local FAST_LIN = 5       -- studs/s
 	local FAST_ANG = 2        -- rad/s
-	local FAST_SECONDS = 0.2     -- tempo seguido acima do limite antes de remover a colisão
+	local FAST_SECONDS = 0.1     -- tempo seguido acima do limite antes de remover a colisão
 	local SCAN_RADIUS = 400    -- só olha as partes até essa distância de mim
 	local SCAN_EVERY = 0.05     -- segundos entre uma varredura e outra
 	local RESULT_SECONDS = 5   -- quanto tempo o resultado fica na tela
-	local STILL_SECONDS = 3    -- tempo parada para voltar ao normal
+	local STILL_SECONDS = 30    -- tempo parada para voltar ao normal
 	local STILL_LIN = 1        -- abaixo disso (studs/s) a parte conta como parada
 	local STILL_ANG = 0.5      -- abaixo disso (rad/s) a parte conta como parada
 
