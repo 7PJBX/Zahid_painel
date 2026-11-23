@@ -851,6 +851,10 @@ do
 		local hrp = char and char:FindFirstChild("HumanoidRootPart")
 		if not hrp then return end
 		local ex = { char }
+		-- personagens dos outros jogadores (corpo, roupas e acessórios) não entram na detecção
+		for _, p in ipairs(Players:GetPlayers()) do
+			if p ~= player and p.Character then ex[#ex + 1] = p.Character end
+		end
 		if floatPart then ex[#ex + 1] = floatPart end
 		scanParams.FilterDescendantsInstances = ex
 		local seen = {}
@@ -1656,7 +1660,7 @@ do
 
 	local binocularsEquipped = false
 	local zoomT = 0            -- 0 = sem zoom (fov normal) .. 1 = zoom máximo
-	local ZOOM_FOV_MIN = 12
+	local ZOOM_FOV_MIN = 8
 	local activeFov = config.fov
 	local rotScale = 1         -- multiplicador da rotação da câmera (cai com o zoom dos binóculos)
 	local origMouseDelta = UIS.MouseDeltaSensitivity
