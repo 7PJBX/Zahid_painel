@@ -1660,7 +1660,7 @@ do
 
 	local binocularsEquipped = false
 	local zoomT = 0            -- 0 = sem zoom (fov normal) .. 1 = zoom máximo
-	local ZOOM_FOV_MIN = 3
+	local ZOOM_FOV_MIN = 1
 	local activeFov = config.fov
 	local rotScale = 1         -- multiplicador da rotação da câmera (cai com o zoom dos binóculos)
 	local origMouseDelta = UIS.MouseDeltaSensitivity
