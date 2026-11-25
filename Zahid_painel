@@ -777,12 +777,11 @@ do
 	local SCAN_RADIUS = 400    -- só olha as partes até essa distância de mim
 	local SCAN_EVERY = 0.05     -- segundos entre uma varredura e outra
 	local RESULT_SECONDS = 5   -- quanto tempo o resultado fica na tela
-	local STILL_SECONDS = 3    -- tempo parada para voltar ao normal
+	local STILL_SECONDS = 50    -- tempo parada para voltar ao normal
 	local STILL_LIN = 1        -- abaixo disso (studs/s) a parte conta como parada
 	local STILL_ANG = 0.5      -- abaixo disso (rad/s) a parte conta como parada
 
 	local mine = {}            -- [minha parte] = CanCollide original
-	local mineTouch = {}       -- [minha parte] = CanTouch original
 	local removed = {}         -- [parte] = { cc, tr } originais das partes já removidas
 	local since = {}           -- [parte] = quando começou a ficar rápida
 	local stillSince = {}      -- [parte] = quando começou a ficar parada (das já removidas)
@@ -826,10 +825,6 @@ do
 			if part.Parent then part.CanCollide = cc end
 			mine[part] = nil
 		end
-		for part, ct in pairs(mineTouch) do
-			if part.Parent then part.CanTouch = ct end
-			mineTouch[part] = nil
-		end
 		local char = player.Character
 		if char then
 			for _, part in ipairs(char:GetDescendants()) do
@@ -841,7 +836,6 @@ do
 		for part, o in pairs(removed) do
 			if part.Parent then
 				part.CanCollide = o.cc
-				part.CanTouch = o.ct
 				part.Transparency = o.tr
 			end
 			removed[part] = nil
@@ -879,9 +873,8 @@ do
 						since[part] = now
 						candidates += 1
 					elseif now - t0 > FAST_SECONDS then
-						removed[part] = { cc = part.CanCollide, ct = part.CanTouch, tr = part.Transparency }
+						removed[part] = { cc = part.CanCollide, tr = part.Transparency }
 						part.CanCollide = false
-						part.CanTouch = false
 						part.Transparency = math.max(part.Transparency, 0.95)
 						since[part] = nil
 						removedN += 1
@@ -906,7 +899,6 @@ do
 					stillSince[part] = stillSince[part] or now
 					if now - stillSince[part] >= STILL_SECONDS then
 						part.CanCollide = o.cc
-						part.CanTouch = o.ct
 						part.Transparency = o.tr
 						removed[part] = nil
 						stillSince[part] = nil
@@ -944,8 +936,6 @@ do
 					if part:IsA("BasePart") then
 						if mine[part] == nil then mine[part] = part.CanCollide end
 						part.CanCollide = false
-						if mineTouch[part] == nil then mineTouch[part] = part.CanTouch end
-						part.CanTouch = false
 					end
 				end
 			end
