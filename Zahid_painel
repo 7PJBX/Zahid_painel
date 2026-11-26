@@ -10,7 +10,7 @@ local TeleportService = game:GetService("TeleportService")
 local HttpService = game:GetService("HttpService")
 local player = Players.LocalPlayer
 
-local VERSION = "1.20"
+local VERSION = "1.21"
 
 -- já existe um menu aberto? então não abre outro: mostra um aviso e destaca o menu que já está na tela
 do
@@ -777,14 +777,10 @@ do
 	local SCAN_RADIUS = 400    -- só olha as partes até essa distância de mim
 	local SCAN_EVERY = 0.05     -- segundos entre uma varredura e outra
 	local RESULT_SECONDS = 5   -- quanto tempo o resultado fica na tela
-	local STILL_SECONDS = 50    -- tempo parada para voltar ao normal
-	local STILL_LIN = 1        -- abaixo disso (studs/s) a parte conta como parada
-	local STILL_ANG = 0.5      -- abaixo disso (rad/s) a parte conta como parada
 
 	local mine = {}            -- [minha parte] = CanCollide original
-	local removed = {}         -- [parte] = { cc, tr } originais das partes já removidas
+	local removed = {}         -- [parte] = { parent } original das partes já removidas (voltam ao desligar)
 	local since = {}           -- [parte] = quando começou a ficar rápida
-	local stillSince = {}      -- [parte] = quando começou a ficar parada (das já removidas)
 	local detectedSet = {}     -- partes já detectadas nesta ativação
 	local detectedN, removedN = 0, 0
 	local lastScan, resultUntil = 0, 0
@@ -834,13 +830,12 @@ do
 			end
 		end
 		for part, o in pairs(removed) do
-			if part.Parent then
-				part.CanCollide = o.cc
-				part.Transparency = o.tr
+			if o.parent and o.parent.Parent and not part.Parent then
+				part.Parent = o.parent -- devolve a parte ao lugar original
 			end
 			removed[part] = nil
 		end
-		since, detectedSet, stillSince = {}, {}, {}
+		since, detectedSet = {}, {}
 		detectedN, removedN = 0, 0
 		if hudGui then hudGui:Destroy() hudGui, hudLabel = nil, nil end
 	end
@@ -873,35 +868,13 @@ do
 						since[part] = now
 						candidates += 1
 					elseif now - t0 > FAST_SECONDS then
-						removed[part] = { cc = part.CanCollide, tr = part.Transparency }
-						part.CanCollide = false
-						part.Transparency = math.max(part.Transparency, 0.95)
+						removed[part] = { parent = part.Parent }
+						part.Parent = nil -- tira a parte do workspace de vez (só no seu cliente)
 						since[part] = nil
 						removedN += 1
 						removedNow = true
 					else
 						candidates += 1
-					end
-				end
-			end
-		end
-		-- partes removidas: só voltam ao normal depois de ficarem paradas por STILL_SECONDS
-		for part, o in pairs(removed) do
-			if not part.Parent then
-				removed[part] = nil
-				stillSince[part] = nil
-			else
-				local moving = part.AssemblyLinearVelocity.Magnitude > STILL_LIN
-					or part.AssemblyAngularVelocity.Magnitude > STILL_ANG
-				if moving then
-					stillSince[part] = nil
-				else
-					stillSince[part] = stillSince[part] or now
-					if now - stillSince[part] >= STILL_SECONDS then
-						part.CanCollide = o.cc
-						part.Transparency = o.tr
-						removed[part] = nil
-						stillSince[part] = nil
 					end
 				end
 			end
@@ -1936,7 +1909,7 @@ do
 
 	section(page, "Proteção")
 	addToggle(page, "AntiFling", "AntiFling", "Tira a colisão dos outros jogadores para ninguém te arremessar.", antiFling)
-	addToggle(page, "Anti Part Fling", "Anti Part Fling", "Detecta partes do mapa que se movem por 0.2 s ou mais: tira a colisão delas (95% transparentes) e a das suas partes. Elas voltam ao normal após 3 s paradas. Mostra um aviso pequeno na tela.", antiPartFling)
+	addToggle(page, "Anti Part Fling", "Anti Part Fling", "Detecta partes do mapa que se movem por 0.2 s ou mais e as remove do workspace (só no seu cliente), junto com o dano delas, e tira a colisão das suas partes. Elas voltam ao desligar o botão. Mostra um aviso pequeno na tela.", antiPartFling)
 
 	section(page, "Movimento")
 	addToggle(page, "VFly", "vfly", "Voo de veículo: sente em um assento antes de ligar.", vfly)
@@ -3538,6 +3511,15 @@ end
 -- ===== ABA UPDATES (versão atual e histórico) =====
 -- Para registrar uma versão nova: acrescente uma entrada no TOPO da lista UPDATES (as antigas continuam abaixo).
 local UPDATES = {
+	{
+		version = "1.21",
+		date = "26/11/2026",
+		added = {},
+		changed = {
+			"Anti Part Fling: as partes detectadas agora são removidas do workspace (não ficam mais transparentes) e só voltam quando o botão é desligado",
+		},
+		removed = {},
+	},
 	{
 		version = "1.20",
 		date = "20/11/2026",
