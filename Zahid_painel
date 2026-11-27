@@ -480,41 +480,10 @@ function httpGetBody(url)
 	return nil
 end
 
--- ===== SERVER HOP =====
--- Entra em um servidor, mede o ping de verdade (do seu aparelho até ele, uma única medição) e, se passar de 80 ms,
--- vai para o próximo da lista. O ping que a lista do Roblox mostra serve só para ordenar os servidores.
--- Depois de cada teleporte o script precisa rodar de novo (ZSCRIPT): o progresso fica no arquivo HOP_FILE.
+-- procura um servidor público com no mínimo 6 jogadores e o menor ping
 local MIN_PLAYERS = 6
-local MAX_PING = 80       -- ms: só fica no servidor se o ping medido for menor que isso
-local MAX_TRIES = 12      -- quantos servidores testar, no máximo
-local HOP_FILE = "ZahidPainel_hop.json"
-local StatsService = game:GetService("Stats")
-local StarterGui = game:GetService("StarterGui")
-
-local function hopNotify(text)
-	pcall(function()
-		StarterGui:SetCore("SendNotification", { Title = "Server hop", Text = text, Duration = 6 })
-	end)
-end
-
-local function hopSave(state)
-	if not writefile then return end
-	pcall(function() writefile(HOP_FILE, HttpService:JSONEncode(state)) end)
-end
-
-local function hopLoad()
-	if not (readfile and isfile) then return nil end
-	local ok, data = pcall(function()
-		if not isfile(HOP_FILE) then return nil end
-		return HttpService:JSONDecode(readfile(HOP_FILE))
-	end)
-	if ok and type(data) == "table" then return data end
-	return nil
-end
-
--- servidores públicos com 6+ jogadores e vaga, em ordem do menor para o maior ping da lista (até 30)
-local function findCandidates()
-	local list = {}
+local function findOtherServer()
+	local best, bestPing = nil, math.huge
 	local cursor = nil
 	for _ = 1, 3 do -- até 3 páginas de 100 servidores (do mais cheio para o menos cheio)
 		local url = "https://games.roblox.com/v1/games/" .. game.PlaceId
@@ -531,7 +500,10 @@ local function findCandidates()
 			if type(s.playing) == "number" then lastPlaying = s.playing end
 			if s.id ~= game.JobId and type(s.playing) == "number" and type(s.maxPlayers) == "number"
 				and s.playing >= MIN_PLAYERS and s.playing < s.maxPlayers - 1 then
-				list[#list + 1] = { id = s.id, ping = type(s.ping) == "number" and s.ping or 9999 }
+				local ping = type(s.ping) == "number" and s.ping or math.huge
+				if best == nil or ping < bestPing then
+					best, bestPing = s.id, ping
+				end
 			end
 		end
 
@@ -539,87 +511,17 @@ local function findCandidates()
 		if type(data.nextPageCursor) ~= "string" then break end
 		cursor = data.nextPageCursor
 	end
-	table.sort(list, function(a, b) return a.ping < b.ping end)
-	local ids = {}
-	for i = 1, math.min(#list, 30) do ids[i] = list[i].id end
-	return ids
+	return best
 end
 
--- ping (ms) do seu aparelho até o servidor em que você está: espera 3 s (logo ao entrar o valor ainda oscila)
--- e faz uma única leitura; se vier zerada, espera até 5 s mais pela primeira leitura válida
-local function measurePing()
-	local item
-	pcall(function() item = StatsService.Network.ServerStatsItem["Data Ping"] end)
-	task.wait(3)
-	local value = 0
-	local t0 = os.clock()
-	repeat
-		if item then pcall(function() value = item:GetValue() end) end
-		if value <= 0 then task.wait(0.5) end
-	until value > 0 or os.clock() - t0 > 5
-	if value <= 0 then pcall(function() value = player:GetNetworkPing() * 2000 end) end
-	return value
-end
-
--- teleporta para o próximo servidor da fila; false se acabou a fila ou o limite de tentativas
-local function hopTo(state)
-	while #state.queue > 0 and state.tries < MAX_TRIES do
-		local id = table.remove(state.queue, 1)
-		state.tries += 1
-		state.ts = os.time()
-		hopSave(state)
-		ZSCRIPT.queueSelf()
-		local ok = pcall(function()
-			TeleportService:TeleportToPlaceInstance(state.placeId, id, player)
-		end)
-		if ok then return true end
-	end
-	return false
-end
-
-local function hopGiveUp(state)
-	state.active = false
-	hopSave(state)
-	hopNotify("Nenhum servidor com ping menor que " .. MAX_PING .. " ms foi encontrado.")
-end
-
--- cheguei em um servidor durante um server hop: mede o ping e fica ou segue para o próximo
-task.spawn(function()
-	local st = hopLoad()
-	if not (st and st.active and st.placeId == game.PlaceId) then return end
-	if os.time() - (st.ts or 0) > 90 then -- pedido velho (o teleporte não aconteceu): esquece
-		st.active = false
-		hopSave(st)
-		return
-	end
-	if not game:IsLoaded() then game.Loaded:Wait() end
-	local ping = measurePing()
-	local shown = math.floor(ping + 0.5)
-	if ping < MAX_PING then
-		st.active = false
-		hopSave(st)
-		hopNotify("Servidor com ping de " .. shown .. " ms. Pronto!")
-		return
-	end
-	hopNotify("Ping de " .. shown .. " ms (alto). Tentando outro servidor...")
-	if not hopTo(st) then hopGiveUp(st) end
-end)
-
--- servidor cheio ou fechado: o teleporte falha e eu tento o próximo da fila
-conns.hopFail = TeleportService.TeleportInitFailed:Connect(function(plr)
-	if plr ~= player then return end
-	local st = hopLoad()
-	if not (st and st.active and st.placeId == game.PlaceId and os.time() - (st.ts or 0) < 30) then return end
-	if not hopTo(st) then hopGiveUp(st) end
-end)
-
--- começa o server hop; devolve true se o teleporte foi iniciado, ou false e o motivo
+-- entra em outro servidor; devolve true se o teleporte foi iniciado, ou false e o motivo
 function serverHop()
-	if not (writefile and readfile and isfile) then return false, "Executor sem arquivos" end
-	local ids = findCandidates()
-	if #ids == 0 then return false, "Sem servidor 6+" end
-	local st = { active = true, placeId = game.PlaceId, queue = ids, tries = 0, ts = os.time() }
-	if not hopTo(st) then return false, "Falhou" end
+	local id = findOtherServer()
+	if not id then return false, "Sem servidor 6+" end
+	local ok = pcall(function()
+		TeleportService:TeleportToPlaceInstance(game.PlaceId, id, player)
+	end)
+	if not ok then return false, "Falhou" end
 	return true
 end
 end
@@ -2589,7 +2491,7 @@ do
 	local page = pages.server
 	section(page, "Entrar em servidores")
 	local rejoinRow = addRow(page, "Rejoin", "Volta para este mesmo servidor.", "action", "ir", "Net")
-	local hopRow = addRow(page, "Server hop", "Entra em um servidor com 6+ jogadores e ping menor que 80.", "action", "ir", "Net")
+	local hopRow = addRow(page, "Server hop", "Entra em um servidor com 6+ jogadores e o menor ping.", "action", "ir", "Net")
 	local backRow = addRow(page, "voltar", "Volta para o último servidor em que você estava.", "action", "ir", "Net")
 
 	-- um botão por vez: enquanto um teleporte está em andamento, os outros esperam
