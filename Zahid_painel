@@ -10,7 +10,7 @@ local TeleportService = game:GetService("TeleportService")
 local HttpService = game:GetService("HttpService")
 local player = Players.LocalPlayer
 
-local VERSION = "1.21"
+local VERSION = "1.20"
 
 -- já existe um menu aberto? então não abre outro: mostra um aviso e destaca o menu que já está na tela
 do
@@ -85,7 +85,7 @@ local flyState = {}
 
 -- ===== CONFIGURAÇÕES (guardadas em arquivo) =====
 local CONFIG_FILE = "ZahidPainel_config.json"
-local config = { theme = "dark", sound = true, soundName = "pop", fov = 70 } -- soundName: "pop", "retro" ou "gota"
+local config = { theme = "dark", sound = true, soundName = "retro", fov = 70 } -- soundName: "pop", "retro" ou "gota"
 if readfile and isfile then
 	local ok, data = pcall(function()
 		if not isfile(CONFIG_FILE) then return nil end
@@ -101,6 +101,7 @@ if readfile and isfile then
 		if type(data.fov) == "number" then config.fov = math.clamp(data.fov, 30, 100) end
 	end
 end
+config.soundName = "retro" -- agora só existe o som retro
 local function saveConfig()
 	if not writefile then return end
 	pcall(function() writefile(CONFIG_FILE, HttpService:JSONEncode(config)) end)
@@ -316,11 +317,11 @@ local function floatToggle(on)
 
 	floatPart = Instance.new("Part")
 	floatPart.Name = "FloatPlatform"
-	floatPart.Size = Vector3.new(6, 1, 6)
+	floatPart.Size = Vector3.new(90, 1, 90)
 	floatPart.Anchored = true
 	floatPart.CanCollide = true
 	floatPart.CanQuery = false
-	floatPart.Transparency = 0.82 -- um pouco translúcida, só pra dar pra perceber
+	floatPart.Transparency = 1 -- totalmente transparente
 	floatPart.Parent = workspace
 
 	floatY = hrp.Position.Y - 3.5 -- topo da plataforma na altura dos pés
@@ -421,6 +422,33 @@ local function respawnHere(onDone)
 	end)
 end
 
+-- ===== COMO ESTE SCRIPT RODA DE NOVO DEPOIS DE UM TELEPORTE (auto farm e server hop) =====
+-- url: link (raw) do script, que precisa conter esta versão; file: nome do script na pasta workspace do executor
+-- (use quando url estiver vazio); useQueue: false se o script já roda sozinho pela pasta autoexec.
+local ZSCRIPT = {
+	file = "Zahid_painel.lua",
+	url = "https://raw.githubusercontent.com/7PJBX/Zahid_painel/refs/heads/main/Zahid_painel",
+	useQueue = true,
+	queued = false,
+}
+function ZSCRIPT.queueSelf()
+	if ZSCRIPT.queued then return true end -- já pedi: pedir de novo rodaria o script duas vezes
+	if not ZSCRIPT.useQueue then return false end
+	local q = queue_on_teleport or (syn and syn.queue_on_teleport)
+	if not q then return false end
+	local code
+	if ZSCRIPT.url ~= "" then
+		code = 'loadstring(game:HttpGet("' .. ZSCRIPT.url .. '"))()'
+	else
+		code = 'loadstring(readfile("' .. ZSCRIPT.file .. '"))()'
+	end
+	if pcall(q, code) then
+		ZSCRIPT.queued = true
+		return true
+	end
+	return false
+end
+
 -- ===== REJOIN / SERVER HOP =====
 local netBusy, rejoinServer, httpGetBody, serverHop
 do
@@ -452,10 +480,41 @@ function httpGetBody(url)
 	return nil
 end
 
--- procura um servidor público com no mínimo 6 jogadores e o menor ping
+-- ===== SERVER HOP =====
+-- Entra em um servidor, mede o ping de verdade (do seu aparelho até ele, uma única medição) e, se passar de 80 ms,
+-- vai para o próximo da lista. O ping que a lista do Roblox mostra serve só para ordenar os servidores.
+-- Depois de cada teleporte o script precisa rodar de novo (ZSCRIPT): o progresso fica no arquivo HOP_FILE.
 local MIN_PLAYERS = 6
-local function findOtherServer()
-	local best, bestPing = nil, math.huge
+local MAX_PING = 80       -- ms: só fica no servidor se o ping medido for menor que isso
+local MAX_TRIES = 12      -- quantos servidores testar, no máximo
+local HOP_FILE = "ZahidPainel_hop.json"
+local StatsService = game:GetService("Stats")
+local StarterGui = game:GetService("StarterGui")
+
+local function hopNotify(text)
+	pcall(function()
+		StarterGui:SetCore("SendNotification", { Title = "Server hop", Text = text, Duration = 6 })
+	end)
+end
+
+local function hopSave(state)
+	if not writefile then return end
+	pcall(function() writefile(HOP_FILE, HttpService:JSONEncode(state)) end)
+end
+
+local function hopLoad()
+	if not (readfile and isfile) then return nil end
+	local ok, data = pcall(function()
+		if not isfile(HOP_FILE) then return nil end
+		return HttpService:JSONDecode(readfile(HOP_FILE))
+	end)
+	if ok and type(data) == "table" then return data end
+	return nil
+end
+
+-- servidores públicos com 6+ jogadores e vaga, em ordem do menor para o maior ping da lista (até 30)
+local function findCandidates()
+	local list = {}
 	local cursor = nil
 	for _ = 1, 3 do -- até 3 páginas de 100 servidores (do mais cheio para o menos cheio)
 		local url = "https://games.roblox.com/v1/games/" .. game.PlaceId
@@ -472,10 +531,7 @@ local function findOtherServer()
 			if type(s.playing) == "number" then lastPlaying = s.playing end
 			if s.id ~= game.JobId and type(s.playing) == "number" and type(s.maxPlayers) == "number"
 				and s.playing >= MIN_PLAYERS and s.playing < s.maxPlayers - 1 then
-				local ping = type(s.ping) == "number" and s.ping or math.huge
-				if best == nil or ping < bestPing then
-					best, bestPing = s.id, ping
-				end
+				list[#list + 1] = { id = s.id, ping = type(s.ping) == "number" and s.ping or 9999 }
 			end
 		end
 
@@ -483,17 +539,87 @@ local function findOtherServer()
 		if type(data.nextPageCursor) ~= "string" then break end
 		cursor = data.nextPageCursor
 	end
-	return best
+	table.sort(list, function(a, b) return a.ping < b.ping end)
+	local ids = {}
+	for i = 1, math.min(#list, 30) do ids[i] = list[i].id end
+	return ids
 end
 
--- entra em outro servidor; devolve true se o teleporte foi iniciado, ou false e o motivo
+-- ping (ms) do seu aparelho até o servidor em que você está: espera 3 s (logo ao entrar o valor ainda oscila)
+-- e faz uma única leitura; se vier zerada, espera até 5 s mais pela primeira leitura válida
+local function measurePing()
+	local item
+	pcall(function() item = StatsService.Network.ServerStatsItem["Data Ping"] end)
+	task.wait(3)
+	local value = 0
+	local t0 = os.clock()
+	repeat
+		if item then pcall(function() value = item:GetValue() end) end
+		if value <= 0 then task.wait(0.5) end
+	until value > 0 or os.clock() - t0 > 5
+	if value <= 0 then pcall(function() value = player:GetNetworkPing() * 2000 end) end
+	return value
+end
+
+-- teleporta para o próximo servidor da fila; false se acabou a fila ou o limite de tentativas
+local function hopTo(state)
+	while #state.queue > 0 and state.tries < MAX_TRIES do
+		local id = table.remove(state.queue, 1)
+		state.tries += 1
+		state.ts = os.time()
+		hopSave(state)
+		ZSCRIPT.queueSelf()
+		local ok = pcall(function()
+			TeleportService:TeleportToPlaceInstance(state.placeId, id, player)
+		end)
+		if ok then return true end
+	end
+	return false
+end
+
+local function hopGiveUp(state)
+	state.active = false
+	hopSave(state)
+	hopNotify("Nenhum servidor com ping menor que " .. MAX_PING .. " ms foi encontrado.")
+end
+
+-- cheguei em um servidor durante um server hop: mede o ping e fica ou segue para o próximo
+task.spawn(function()
+	local st = hopLoad()
+	if not (st and st.active and st.placeId == game.PlaceId) then return end
+	if os.time() - (st.ts or 0) > 90 then -- pedido velho (o teleporte não aconteceu): esquece
+		st.active = false
+		hopSave(st)
+		return
+	end
+	if not game:IsLoaded() then game.Loaded:Wait() end
+	local ping = measurePing()
+	local shown = math.floor(ping + 0.5)
+	if ping < MAX_PING then
+		st.active = false
+		hopSave(st)
+		hopNotify("Servidor com ping de " .. shown .. " ms. Pronto!")
+		return
+	end
+	hopNotify("Ping de " .. shown .. " ms (alto). Tentando outro servidor...")
+	if not hopTo(st) then hopGiveUp(st) end
+end)
+
+-- servidor cheio ou fechado: o teleporte falha e eu tento o próximo da fila
+conns.hopFail = TeleportService.TeleportInitFailed:Connect(function(plr)
+	if plr ~= player then return end
+	local st = hopLoad()
+	if not (st and st.active and st.placeId == game.PlaceId and os.time() - (st.ts or 0) < 30) then return end
+	if not hopTo(st) then hopGiveUp(st) end
+end)
+
+-- começa o server hop; devolve true se o teleporte foi iniciado, ou false e o motivo
 function serverHop()
-	local id = findOtherServer()
-	if not id then return false, "Sem servidor 6+" end
-	local ok = pcall(function()
-		TeleportService:TeleportToPlaceInstance(game.PlaceId, id, player)
-	end)
-	if not ok then return false, "Falhou" end
+	if not (writefile and readfile and isfile) then return false, "Executor sem arquivos" end
+	local ids = findCandidates()
+	if #ids == 0 then return false, "Sem servidor 6+" end
+	local st = { active = true, placeId = game.PlaceId, queue = ids, tries = 0, ts = os.time() }
+	if not hopTo(st) then return false, "Falhou" end
 	return true
 end
 end
@@ -554,15 +680,13 @@ do
 --  * se a conexão cair (erro 277 etc.), tenta reconectar sozinho; ao voltar,
 --    o estado é restaurado (posição, auto farm ligado e ferramenta do slot 2).
 -- Para restaurar depois de reconectar, o script precisa rodar de novo no novo servidor:
---  * o link do script está em SCRIPT_URL (ele precisa conter esta versão do script), OU salve este
---    script com o nome de SCRIPT_FILE na pasta workspace do executor (deixando SCRIPT_URL vazio),
---    OU deixe-o na pasta autoexec (e use USE_QUEUE = false).
+--  * o link do script está em ZSCRIPT.url (ele precisa conter esta versão do script), OU salve este
+--    script com o nome de ZSCRIPT.file na pasta workspace do executor (deixando ZSCRIPT.url vazio),
+--    OU deixe-o na pasta autoexec (e use ZSCRIPT.useQueue = false).
 local GuiService = game:GetService("GuiService")
 
 local FARM_FILE = "ZahidPainel_farm.json" -- onde a posição e o estado ficam salvos
-local SCRIPT_FILE = "Zahid_painel.lua"    -- nome deste script na pasta workspace do executor
-local SCRIPT_URL = "https://raw.githubusercontent.com/7PJBX/Zahid_painel/refs/heads/main/Zahid_painel" -- link (raw) do script
-local USE_QUEUE = true                    -- false se o script já roda sozinho pela pasta autoexec
+-- (link do script, nome do arquivo e USE_QUEUE agora ficam na tabela ZSCRIPT, perto do início do script)
 local TELEPORT_JUMP = 15                  -- deslocamento em 1 frame (studs) que conta como teleporte
 local USE_INTERVAL = 5                    -- segundos entre cada uso da ferramenta
 FARM_ANTIFLING_ON_RELOG = true   -- depois de relogar (queda de internet), já deixa o AntiFling ligado
@@ -604,16 +728,8 @@ end
 
 -- pede ao executor para rodar este script de novo depois do teleporte de reconexão
 local function farmQueueSelf()
-	if farmQueued or not USE_QUEUE then return end
-	local q = queue_on_teleport or (syn and syn.queue_on_teleport)
-	if not q then return end
-	local code
-	if SCRIPT_URL ~= "" then
-		code = 'loadstring(game:HttpGet("' .. SCRIPT_URL .. '"))()'
-	else
-		code = 'loadstring(readfile("' .. SCRIPT_FILE .. '"))()'
-	end
-	if pcall(q, code) then farmQueued = true end
+	if farmQueued then return end
+	if ZSCRIPT.queueSelf() then farmQueued = true end
 end
 
 -- vai para a posição definida (repete por uns segundos, pois o jogo também posiciona o personagem)
@@ -777,10 +893,14 @@ do
 	local SCAN_RADIUS = 400    -- só olha as partes até essa distância de mim
 	local SCAN_EVERY = 0.05     -- segundos entre uma varredura e outra
 	local RESULT_SECONDS = 5   -- quanto tempo o resultado fica na tela
+	local STILL_SECONDS = 50    -- tempo parada para voltar ao normal
+	local STILL_LIN = 1        -- abaixo disso (studs/s) a parte conta como parada
+	local STILL_ANG = 0.5      -- abaixo disso (rad/s) a parte conta como parada
 
 	local mine = {}            -- [minha parte] = CanCollide original
-	local removed = {}         -- [parte] = { parent } original das partes já removidas (voltam ao desligar)
+	local removed = {}         -- [parte] = { cc, tr } originais das partes já removidas
 	local since = {}           -- [parte] = quando começou a ficar rápida
+	local stillSince = {}      -- [parte] = quando começou a ficar parada (das já removidas)
 	local detectedSet = {}     -- partes já detectadas nesta ativação
 	local detectedN, removedN = 0, 0
 	local lastScan, resultUntil = 0, 0
@@ -830,12 +950,13 @@ do
 			end
 		end
 		for part, o in pairs(removed) do
-			if o.parent and o.parent.Parent and not part.Parent then
-				part.Parent = o.parent -- devolve a parte ao lugar original
+			if part.Parent then
+				part.CanCollide = o.cc
+				part.Transparency = o.tr
 			end
 			removed[part] = nil
 		end
-		since, detectedSet = {}, {}
+		since, detectedSet, stillSince = {}, {}, {}
 		detectedN, removedN = 0, 0
 		if hudGui then hudGui:Destroy() hudGui, hudLabel = nil, nil end
 	end
@@ -868,13 +989,35 @@ do
 						since[part] = now
 						candidates += 1
 					elseif now - t0 > FAST_SECONDS then
-						removed[part] = { parent = part.Parent }
-						part.Parent = nil -- tira a parte do workspace de vez (só no seu cliente)
+						removed[part] = { cc = part.CanCollide, tr = part.Transparency }
+						part.CanCollide = false
+						part.Transparency = math.max(part.Transparency, 0.95)
 						since[part] = nil
 						removedN += 1
 						removedNow = true
 					else
 						candidates += 1
+					end
+				end
+			end
+		end
+		-- partes removidas: só voltam ao normal depois de ficarem paradas por STILL_SECONDS
+		for part, o in pairs(removed) do
+			if not part.Parent then
+				removed[part] = nil
+				stillSince[part] = nil
+			else
+				local moving = part.AssemblyLinearVelocity.Magnitude > STILL_LIN
+					or part.AssemblyAngularVelocity.Magnitude > STILL_ANG
+				if moving then
+					stillSince[part] = nil
+				else
+					stillSince[part] = stillSince[part] or now
+					if now - stillSince[part] >= STILL_SECONDS then
+						part.CanCollide = o.cc
+						part.Transparency = o.tr
+						removed[part] = nil
+						stillSince[part] = nil
 					end
 				end
 			end
@@ -940,7 +1083,7 @@ local THEMES = {
 		faceDanger = Color3.fromRGB(122, 48, 56), baseDanger = Color3.fromRGB(62, 24, 30),
 		field = Color3.fromRGB(34, 34, 41), card = Color3.fromRGB(32, 32, 38),
 		good = Color3.fromRGB(120, 230, 150), bad = Color3.fromRGB(255, 110, 110), warn = Color3.fromRGB(255, 205, 100),
-		bubbleBg = Color3.fromRGB(20, 20, 25), accent = Color3.fromRGB(110, 190, 255), trackOff = Color3.fromRGB(72, 72, 84),
+		bubbleBg = Color3.fromRGB(20, 20, 25), switchOn = Color3.fromRGB(80, 200, 255), accent = Color3.fromRGB(110, 190, 255), trackOff = Color3.fromRGB(72, 72, 84),
 	},
 	light = {
 		panelTop = Color3.fromRGB(252, 252, 254), panelBottom = Color3.fromRGB(232, 232, 238),
@@ -954,7 +1097,7 @@ local THEMES = {
 		faceDanger = Color3.fromRGB(232, 150, 150), baseDanger = Color3.fromRGB(190, 100, 104),
 		field = Color3.fromRGB(240, 240, 246), card = Color3.fromRGB(244, 244, 249),
 		good = Color3.fromRGB(26, 140, 66), bad = Color3.fromRGB(200, 46, 46), warn = Color3.fromRGB(176, 110, 0),
-		bubbleBg = Color3.fromRGB(246, 246, 250), accent = Color3.fromRGB(30, 110, 200), trackOff = Color3.fromRGB(176, 176, 190),
+		bubbleBg = Color3.fromRGB(246, 246, 250), switchOn = Color3.fromRGB(30, 150, 210), accent = Color3.fromRGB(30, 110, 200), trackOff = Color3.fromRGB(176, 176, 190),
 	},
 }
 local T = {}                   -- cores do tema atual (todo o código lê daqui)
@@ -1333,10 +1476,10 @@ function addRow(page, name, desc, kind, btnText, role)
 		knob.Parent = track
 		Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
 
-		onTheme(function() track.BackgroundColor3 = obj.isOn and T.good or T.trackOff end)
+		onTheme(function() track.BackgroundColor3 = obj.isOn and T.switchOn or T.trackOff end)
 		function obj.setOn(on)
 			obj.isOn = on
-			tween(track, 0.18, { BackgroundColor3 = on and T.good or T.trackOff })
+			tween(track, 0.18, { BackgroundColor3 = on and T.switchOn or T.trackOff })
 			tween(knob, 0.2, { Position = on and UDim2.new(0, 21, 0.5, -9) or UDim2.new(0, 3, 0.5, -9) }, Enum.EasingStyle.Back)
 		end
 		face.InputBegan:Connect(function(input)
@@ -1452,7 +1595,7 @@ content.Size = UDim2.new(1, -(SIDE_W + 22), 1, -42)
 content.Parent = window
 
 local TABS = {
-	{ id = "comportamento", label = "Comportamento" },
+	{ id = "comportamento", label = "Utilidade" },
 	{ id = "jogadores", label = "Jogadores" },
 	{ id = "server", label = "Server" },
 	{ id = "fun", label = "Fun" },
@@ -1796,6 +1939,27 @@ do
 	shiftGui.Enabled = false
 	shiftGui.Parent = player:WaitForChild("PlayerGui")
 
+	-- mira no meio da tela (aparece com a trava ligada, igual ao shift lock do Roblox)
+	local mira = Instance.new("ScreenGui")
+	mira.Name = "TravaDirecaoMira"
+	mira.ResetOnSpawn = false
+	mira.IgnoreGuiInset = true
+	mira.DisplayOrder = 17
+	mira.Enabled = false
+	mira.Parent = player:WaitForChild("PlayerGui")
+	local miraDot = Instance.new("Frame")
+	miraDot.AnchorPoint = Vector2.new(0.5, 0.5)
+	miraDot.Position = UDim2.fromScale(0.5, 0.5)
+	miraDot.Size = UDim2.fromOffset(14, 14)
+	miraDot.BackgroundTransparency = 1
+	miraDot.BorderSizePixel = 0
+	miraDot.Parent = mira
+	Instance.new("UICorner", miraDot).CornerRadius = UDim.new(1, 0)
+	local miraStroke = Instance.new("UIStroke")
+	miraStroke.Color = Color3.fromRGB(255, 255, 255)
+	miraStroke.Thickness = 2
+	miraStroke.Parent = miraDot
+
 	local SB = 56
 	local shiftBtn = Instance.new("TextButton")
 	shiftBtn.AnchorPoint = Vector2.new(0.5, 0.5)
@@ -1804,7 +1968,7 @@ do
 	shiftBtn.BackgroundColor3 = Color3.new(0, 0, 0)
 	shiftBtn.BackgroundTransparency = 0.7
 	shiftBtn.AutoButtonColor = false
-	shiftBtn.Text = ""
+	shiftBtn.Text = "🔒"
 	shiftBtn.Active = true
 	shiftBtn.Parent = shiftGui
 	Instance.new("UICorner", shiftBtn).CornerRadius = UDim.new(1, 0)
@@ -1825,6 +1989,7 @@ do
 		local cam = workspace.CurrentCamera
 		if not (hum and hrp and cam) then return end
 		hum.AutoRotate = false
+		hum.CameraOffset = Vector3.new(1.75, 0, 0) -- câmera um pouco à direita, como no shift lock
 		local look = cam.CFrame.LookVector
 		local yaw = math.atan2(-look.X, -look.Z)
 		hrp.CFrame = CFrame.new(hrp.Position) * CFrame.Angles(0, yaw, 0)
@@ -1832,6 +1997,7 @@ do
 
 	local function setLockFacing(on)
 		lockFacing = on
+		mira.Enabled = on
 		tween(shiftBtn, 0.15, { BackgroundTransparency = on and 0.35 or 0.7 })
 		shiftStroke.Thickness = on and 2 or (btnLocked and 1 or 0)
 		if on then
@@ -1840,14 +2006,20 @@ do
 		else
 			if facingConn then facingConn:Disconnect() facingConn = nil end
 			local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
-			if hum then hum.AutoRotate = true end
+			if hum then
+				hum.AutoRotate = true
+				hum.CameraOffset = Vector3.zero
+			end
 		end
 	end
 
 	-- arraste livre pela tela; segurar 1s sem mover trava (ou destrava) a posição do botão
 	local sbDragging, sbStart, sbMoved, sbHoldTok = false, Vector2.zero, false, 0
+	local sbPressed, sbHeldDone = false, false -- sbHeldDone: o segurar 1 s já fixou/soltou o botão (soltar não liga a trava)
 	shiftBtn.InputBegan:Connect(function(input)
 		if not isPress(input) then return end
+		sbPressed = true
+		sbHeldDone = false
 		sbDragging = not btnLocked
 		sbStart = input.Position
 		sbMoved = false
@@ -1856,6 +2028,7 @@ do
 		task.delay(1, function()
 			if mine ~= sbHoldTok or sbMoved then return end
 			btnLocked = not btnLocked
+			sbHeldDone = true
 			sbDragging = false
 			shiftStroke.Thickness = lockFacing and 2 or (btnLocked and 1 or 0)
 			local old = shiftBtn.BackgroundColor3
@@ -1879,10 +2052,11 @@ do
 		end
 	end)
 	UIS.InputEnded:Connect(function(input)
-		if not (isPress(input) and sbDragging) then return end
+		if not (isPress(input) and sbPressed) then return end
+		sbPressed = false
 		sbDragging = false
 		sbHoldTok += 1 -- cancela o "segurar 1s" (já soltei antes de completar)
-		if not sbMoved then
+		if not sbMoved and not sbHeldDone then
 			setLockFacing(not lockFacing) -- toque curto: liga/desliga a trava de direção
 		end
 	end)
@@ -1899,8 +2073,23 @@ do
 		if camInputMod and origGetRotation then camInputMod.getRotation = origGetRotation end
 		pcall(function() UIS.MouseDeltaSensitivity = origMouseDelta end)
 		binOverlay:Destroy()
+		mira:Destroy()
 		shiftGui:Destroy()
 	end }
+end
+
+-- par de botões lado a lado, sem descrição: ⬆️ sobe e ⬇️ desce (segure para usar)
+local function addArrowPair(page, setUp, setDown)
+	local row = Instance.new("Frame")
+	row.BorderSizePixel = 0
+	row.Size = UDim2.new(1, 0, 0, 46)
+	row.Parent = page
+	Instance.new("UICorner", row).CornerRadius = UDim.new(0, 10)
+	onTheme(function() row.BackgroundColor3 = T.card end)
+	local up = new3DButton(row, "⬆️", UDim2.new(0, 6, 0, 6), UDim2.new(0.5, -9, 0, 34), "Off")
+	local down = new3DButton(row, "⬇️", UDim2.new(0.5, 3, 0, 6), UDim2.new(0.5, -9, 0, 34), "Off")
+	bindHold(up, function() setUp(true) end, function() setUp(false) end)
+	bindHold(down, function() setDown(true) end, function() setDown(false) end)
 end
 
 -- ===== ABA COMPORTAMENTO =====
@@ -1908,21 +2097,18 @@ do
 	local page = pages.comportamento
 
 	section(page, "Proteção")
-	addToggle(page, "AntiFling", "AntiFling", "Tira a colisão dos outros jogadores para ninguém te arremessar.", antiFling)
-	addToggle(page, "Anti Part Fling", "Anti Part Fling", "Detecta partes do mapa que se movem por 0.2 s ou mais e as remove do workspace (só no seu cliente), junto com o dano delas, e tira a colisão das suas partes. Elas voltam ao desligar o botão. Mostra um aviso pequeno na tela.", antiPartFling)
+	addToggle(page, "AntiFling", "AntiFling", "jogadores não te arremessam", antiFling)
+	addToggle(page, "Anti Part Fling", "Anti Part Fling", "partes não te arremessam", antiPartFling)
 
 	section(page, "Movimento")
-	addToggle(page, "VFly", "vfly", "Voo de veículo: sente em um assento antes de ligar.", vfly)
-	addToggle(page, "Fly", "fly", "Voo livre na direção da câmera.", fly)
+	addToggle(page, "VFly", "vfly", "voar com veículos", vfly)
+	addToggle(page, "Fly", "fly", "voar por aí", fly)
 	addToggle(page, "Float", "float", "Cria uma plataforma sob seus pés e você fica no ar.", floatToggle)
-	local downRow = addRow(page, "descer", "Segure para descer a plataforma do float e do ajudar.", "action", "segurar")
-	local upRow = addRow(page, "subir", "Segure para subir a plataforma do float e do ajudar.", "action", "segurar")
-	bindHold(downRow.btn, function() floatDown = true end, function() floatDown = false end)
-	bindHold(upRow.btn, function() floatUp = true end, function() floatUp = false end)
+	addArrowPair(page, function(v) floatUp = v end, function(v) floatDown = v end)
 
 	section(page, "Outros")
 	-- resetar: regenera o personagem e volta para o mesmo lugar
-	local reRow = addRow(page, "resetar", "Regenera o personagem e volta para o mesmo lugar.", "action", "resetar")
+	local reRow = addRow(page, "resetar", "Regenera o personagem e volta para o mesmo lugar.", "action", "resetar", "Danger")
 	reRow.face.Activated:Connect(function()
 		reRow.setOn(true)
 		respawnHere(function() reRow.setOn(false) end)
@@ -1985,8 +2171,7 @@ do
 		plus.face.Activated:Connect(function() setBaseFov(config.fov + 5) refresh() end)
 		refresh()
 	end
-	addToggle(page, "Binoculars", "binóculos", "Dá um binóculo na mochila. Equipe para dar zoom (barra do lado direito da tela).", binocularsToggle)
-	addToggle(page, "ShiftLock", "trava de direção", "Mostra um botão preto arrastável; toque nele para o personagem sempre olhar para frente (como o shift lock). Segure 1 s para fixar a posição dele.", setShiftLockFeature)
+	addToggle(page, "ShiftLock", "shift lock", "trava câmera para onde você está olhando", setShiftLockFeature)
 end
 
 -- ===== ABA JOGADORES =====
@@ -2100,12 +2285,12 @@ do
 					UDim2.new(1, 0, 0, 40), e.friend and "Net" or "Off")
 				item.face.TextSize = 12
 				item.face.TextXAlignment = Enum.TextXAlignment.Left
-				mkPadding(item.face, 42, 0, 4, 0)
+				mkPadding(item.face, 48, 0, 4, 0)
 
-				-- foto do avatar à esquerda do nome (o padding de 42 empurra os filhos: compensa)
+				-- foto do avatar à esquerda do nome (o padding de 48 empurra os filhos: compensa)
 				local img = Instance.new("ImageLabel")
-				img.Size = UDim2.fromOffset(28, 28)
-				img.Position = UDim2.new(0, -36, 0.5, -14)
+				img.Size = UDim2.fromOffset(36, 36)
+				img.Position = UDim2.new(0, -42, 0.5, -18)
 				img.BackgroundTransparency = 1
 				img.BorderSizePixel = 0
 				img.Parent = item.face
@@ -2158,20 +2343,21 @@ do
 	end)
 
 	-- ===== TP =====
-	local tpRow = addRow(page, "tp", "Teleporta até o jogador selecionado.", "action", "ir", "Tp")
-	tpRow.face.Activated:Connect(function()
+	local tpBtn = new3DButton(page, "teleportar", UDim2.new(0, 0, 0, 0), UDim2.new(1, 0, 0, 38), "Tp")
+	tpBtn.face.Activated:Connect(function()
 		local myHrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
 		local targetChar = selectedPlayer and selectedPlayer.Character
 		local targetHrp = targetChar and targetChar:FindFirstChild("HumanoidRootPart")
 		if myHrp and targetHrp then
 			myHrp.CFrame = targetHrp.CFrame * CFrame.new(0, 0, 3)
 		else
-			tpRow.flash("Selecione um jogador", "bad")
+			tpBtn.face.Text = "selecione um jogador"
+			task.delay(1.6, function() tpBtn.face.Text = "teleportar" end)
 		end
 	end)
 
 	-- ===== ESPECTAR: a câmera vai até o jogador sem você sair do jogo; desligar devolve a câmera =====
-	local specRow = addRow(page, "espectar", "A câmera vai até o jogador, sem você sair do jogo.", "switch")
+	local specRow = addRow(page, "espectar", "câmera vai até o jogador selecionado", "switch")
 	local specConn, specTarget = nil, nil
 	function stopSpectate()
 		spectating = false
@@ -2219,7 +2405,8 @@ do
 	local FOLLOW_GAIN = 25       -- quão rápido acompanho o jogador na horizontal (maior = mais colado)
 	local FOLLOW_MAX = 60        -- velocidade máxima desse acompanhamento (studs por segundo)
 	local FOLLOW_SNAP = 40       -- se ele ficar mais longe que isso (ex.: se teleportou), vou direto para baixo dele
-	local FREAR_DELAY = 1        -- segundos segurando "frear" antes de ir para baixo do jogador
+	local FREAR_DELAY = 1        -- segundos depois de apertar "frear" até ir para baixo do jogador
+	local HELP_TP_DIST = 200     -- se o servidor me mover tanto (ou mais) de um quadro para o outro, o ajudar desliga
 	local FREAR_OFFSET = 2       -- quantos studs abaixo do jogador eu vou quando o "frear" teleporta
 	local helpState = nil        -- { bv, bg, hum, conn, yaw } enquanto o ajudar está ligado
 	local helpApfPending = false -- o Anti Part Fling estava ligado e volta quando eu terminar
@@ -2233,7 +2420,7 @@ do
 		return player.Character and player.Character:FindFirstChild("HumanoidRootPart")
 	end
 
-	local helpRow = addRow(page, "ajudar", "Deita sob o jogador selecionado e o acompanha; só se move na vertical.", "switch")
+	local helpRow = addRow(page, "ajudar", "sobe o desce o jogador", "switch")
 
 	local function stopHelp()
 		if not helpOn then return end
@@ -2318,6 +2505,7 @@ do
 		mine.CFrame = CFrame.new(tp.X, tp.Y - LIE_OFFSET, tp.Z) * lieRot
 		mine.AssemblyLinearVelocity = Vector3.zero
 		mine.AssemblyAngularVelocity = Vector3.zero
+		local lastPos = mine.Position
 
 		helpState = { bv = bv, bg = bg, hum = hum, yaw = yaw }
 		helpState.conn = RunService.Heartbeat:Connect(function()
@@ -2328,6 +2516,11 @@ do
 			end
 			if not selectedPlayer then
 				stopHelp() -- o jogador saiu do servidor
+				return
+			end
+			-- o servidor me teleportou (200 studs ou mais de uma vez): desliga o ajudar
+			if (r.Position - lastPos).Magnitude >= HELP_TP_DIST then
+				stopHelp()
 				return
 			end
 			hum.PlatformStand = true
@@ -2341,12 +2534,15 @@ do
 			local vx, vz = 0, 0
 			local t = targetRoot()
 			if helpFrearHeld then
-				-- segurando "frear": paro de seguir; depois de 1 segundo vou (uma vez) para baixo do jogador
-				if t and not helpFrearDone and os.clock() - helpFrearStart >= FREAR_DELAY then
+				-- "frear" apertado: paro de seguir; depois de 1 segundo vou (uma vez) para baixo do jogador e volto a seguir
+				if os.clock() - helpFrearStart >= FREAR_DELAY then
+					helpFrearHeld = false
 					helpFrearDone = true
-					local tpos = t.Position
-					r.CFrame = CFrame.new(tpos.X, tpos.Y - FREAR_OFFSET, tpos.Z) * lieRot
-					r.AssemblyLinearVelocity = Vector3.zero
+					if t then
+						local tpos = t.Position
+						r.CFrame = CFrame.new(tpos.X, tpos.Y - FREAR_OFFSET, tpos.Z) * lieRot
+						r.AssemblyLinearVelocity = Vector3.zero
+					end
 				end
 			elseif t then
 				local pos, tpos = r.Position, t.Position
@@ -2361,6 +2557,7 @@ do
 					end
 				end
 			end
+			lastPos = r.Position -- depois dos meus próprios deslocamentos (seguir e frear)
 			bv.Velocity = Vector3.new(vx, vy, vz)
 		end)
 	end
@@ -2371,14 +2568,11 @@ do
 	-- ao fechar o painel, o "fechar" também desliga o ajudar
 	conns.help = { Disconnect = function() if helpOn then stopHelp() end end }
 
-	-- ===== subir / descer e frear (botões para segurar) =====
-	local downRow = addRow(page, "descer", "Segure para descer a plataforma do float e do ajudar.", "action", "segurar")
-	local upRow = addRow(page, "subir", "Segure para subir a plataforma do float e do ajudar.", "action", "segurar")
-	bindHold(downRow.btn, function() floatDown = true end, function() floatDown = false end)
-	bindHold(upRow.btn, function() floatUp = true end, function() floatUp = false end)
+	-- ===== subir / descer (segurar) e frear (um toque) =====
+	addArrowPair(page, function(v) floatUp = v end, function(v) floatDown = v end)
 
-	local frearRow = addRow(page, "frear", "Segure (com o ajudar ligado): para de seguir e, após 1 s, vai para baixo do jogador.", "action", "segurar", "Help")
-	bindHold(frearRow.btn, function()
+	local frearRow = addRow(page, "frear", "para caso estejam se movendo sozinho", "action", "frear", "Help")
+	frearRow.face.Activated:Connect(function()
 		if not helpOn then
 			frearRow.flash("Ligue o ajudar primeiro", "bad")
 			return
@@ -2386,8 +2580,6 @@ do
 		helpFrearHeld = true
 		helpFrearStart = os.clock()
 		helpFrearDone = false
-	end, function()
-		helpFrearHeld = false -- soltou: volta a seguir o jogador
 	end)
 end
 end
@@ -2397,7 +2589,7 @@ do
 	local page = pages.server
 	section(page, "Entrar em servidores")
 	local rejoinRow = addRow(page, "Rejoin", "Volta para este mesmo servidor.", "action", "ir", "Net")
-	local hopRow = addRow(page, "Server hop", "Entra em um servidor com 6+ jogadores e o menor ping.", "action", "ir", "Net")
+	local hopRow = addRow(page, "Server hop", "Entra em um servidor com 6+ jogadores e ping menor que 80.", "action", "ir", "Net")
 	local backRow = addRow(page, "voltar", "Volta para o último servidor em que você estava.", "action", "ir", "Net")
 
 	-- um botão por vez: enquanto um teleporte está em andamento, os outros esperam
@@ -2667,7 +2859,7 @@ do
 		local funScale = Instance.new("UIScale")
 		funScale.Parent = funMenu
 
-		local funTitle = mkLabel(funMenu, "Angry Bird", 14, "text")
+		local funTitle = mkLabel(funMenu, "Estilingue espacial", 14, "text")
 		funTitle.Font = FONT_BOLD
 		funTitle.Position = UDim2.fromOffset(10, 8)
 		funTitle.Size = UDim2.new(1, -56, 0, 18)
@@ -2848,7 +3040,7 @@ do
 		end)
 
 		-- ===== airbag (para ficar em pé no ar, use o botão de pular do Roblox) =====
-		local airbagBtn = new3DButton(body, "airbag", UDim2.fromOffset(10, 140), UDim2.new(1, -20, 0, 30), "Off")
+		local airbagBtn = new3DButton(body, "aterrissagem suave", UDim2.fromOffset(10, 140), UDim2.new(1, -20, 0, 30), "Off")
 
 		-- levanta o personagem de pé (sai do ragdoll) e cancela o voo em andamento
 		local function standUp()
@@ -3007,6 +3199,8 @@ do
 		local function doLaunch(v0)
 			local hum, hrp = getHum(), getRoot()
 			if not (hum and hrp) then return end
+			-- com destino escolhido: levanta ao chegar nele; no arremesso livre só levanta se eu pular
+			local target = (destinoMode and destinoPoint) or nil
 
 			-- o Anti Part Fling tem teto de altura e freia quedas: pausa durante o voo (só na primeira vez,
 			-- assim dá para arremessar de novo ainda no ar sem perder o aviso de religar)
@@ -3024,8 +3218,8 @@ do
 			local token = launchToken
 			task.spawn(function()
 				local t0 = os.clock()
-				local airborneSeen = false
-				-- fica em ragdoll até tocar uma superfície (sem limite de tempo: com gravidade baixa o voo pode demorar)
+				-- fica em ragdoll sem limite de tempo: bate nas coisas e continua voando (física do Roblox);
+				-- só levanta de pé se eu pular ou chegar ao destino
 				while token == launchToken and hrp.Parent and hum.Health > 0 do
 					local dt = RunService.Heartbeat:Wait()
 					if token ~= launchToken then return end
@@ -3035,15 +3229,13 @@ do
 						return
 					end
 					if airbagOn then airbagBrake(hrp, dt) end
-					if touching(hrp) then
-						if airborneSeen then break end
-					elseif os.clock() - t0 > 0.15 then
-						airborneSeen = true -- já saiu do chão: o próximo contato é o pouso
+					if target and (hrp.Position - target).Magnitude <= 6 then
+						break -- chegou ao destino
 					end
 				end
 				if token ~= launchToken then return end
 				if hum.Health > 0 and hrp.Parent then
-					standUp()      -- pousou: levanta de pé
+					standUp()      -- chegou ao destino: levanta de pé
 					afterLanding() -- e a gravidade volta ao normal (se não estiver travada)
 				end
 			end)
@@ -3270,354 +3462,13 @@ end
 
 do
 	local page = pages.fun
-	addToggle(page, "AngryBird", "angry bird", "Abre um mini menu: gravidade, airbag e, do lado direito da tela, a barra de força para arremessar o personagem (estilo estilingue/taco de sinuca).", angryBirdToggle)
-end
-
--- ===== CHUTÃO (mini menu) =====
--- Interruptor "chutão" (aba Fun): abre um mini menu (arrastável, com botão de minimizar) para escolher a força.
--- "chutar" toca a animação do chute e, no momento do golpe, arremessa as partes soltas que estiverem até 4 studs à minha
--- frente (útil para resgatar quem ficou soterrado). Partes de jogadores não são arremessadas, para não machucar quem
--- está sendo resgatado.
-local chutaoToggle
-do
-	local function build()
-		local FMIN, FMAX = 10, 300         -- força (studs/s)
-		local KICK_ANIM = "rbxassetid://133180711707319"
-		local KICK_DELAY = 0.25            -- segundos entre começar a animação e o golpe acertar
-		local REACH = 4                    -- studs à frente
-		local force = 100
-		local busy = false
-		local connList = {}
-		local kickAnim = Instance.new("Animation")
-		kickAnim.AnimationId = KICK_ANIM
-
-		local kickParams = OverlapParams.new()
-		kickParams.FilterType = Enum.RaycastFilterType.Exclude
-		kickParams.MaxParts = 300
-
-		local CW = math.min(176, viewport.X - 16)
-		local CH = 184
-		local HEADER_H = 32
-		local menu = mkWindowFrame(gui)
-		menu.Name = "Chutao"
-		menu.Size = UDim2.fromOffset(CW, CH)
-		menu.Position = UDim2.fromOffset(10, math.max(10, math.min(130, viewport.Y - CH - 10)))
-		menu.Visible = false
-		local scale = Instance.new("UIScale")
-		scale.Parent = menu
-
-		local title = mkLabel(menu, "Chutão", 14, "text")
-		title.Font = FONT_BOLD
-		title.Position = UDim2.fromOffset(10, 8)
-		title.Size = UDim2.new(1, -56, 0, 18)
-		local minBtn = new3DButton(menu, "-", UDim2.new(1, -40, 0, 3), UDim2.fromOffset(32, 26), "Off")
-		minBtn.face.TextSize = 16
-
-		-- arrastar o mini menu pela barra do título
-		local dragBar = Instance.new("Frame")
-		dragBar.BackgroundTransparency = 1
-		dragBar.Size = UDim2.new(1, -46, 0, HEADER_H)
-		dragBar.Active = true
-		dragBar.Parent = menu
-		local drag, dragStart, dragPos = false, Vector2.zero, UDim2.new()
-		dragBar.InputBegan:Connect(function(input)
-			if isPress(input) then
-				drag, dragStart, dragPos = true, input.Position, menu.Position
-			end
-		end)
-
-		local body = Instance.new("Frame")
-		body.BackgroundTransparency = 1
-		body.Position = UDim2.fromOffset(0, HEADER_H)
-		body.Size = UDim2.new(1, 0, 1, -HEADER_H)
-		body.Parent = menu
-
-		local minimized = false
-		minBtn.face.Activated:Connect(function()
-			minimized = not minimized
-			body.Visible = not minimized
-			minBtn.face.Text = minimized and "+" or "-"
-			menu.Size = UDim2.fromOffset(CW, minimized and HEADER_H or CH)
-		end)
-
-		-- força: rótulo, barra e caixa de texto
-		local label = mkLabel(body, "", 12, "textDim")
-		label.Position = UDim2.fromOffset(10, 0)
-		label.Size = UDim2.new(1, -20, 0, 16)
-
-		local track = mkPanel(body, "field", 8)
-		track.Position = UDim2.fromOffset(10, 20)
-		track.Size = UDim2.new(1, -20, 0, 22)
-		track.Active = true
-		local bar = Instance.new("Frame")
-		bar.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-		bar.BackgroundTransparency = 0.7
-		bar.BorderSizePixel = 0
-		bar.Size = UDim2.new(1, -6, 1, -6)
-		bar.Position = UDim2.fromOffset(3, 3)
-		bar.Parent = track
-		Instance.new("UICorner", bar).CornerRadius = UDim.new(1, 0)
-		local knob = Instance.new("Frame")
-		knob.AnchorPoint = Vector2.new(0.5, 0.5)
-		knob.Size = UDim2.fromOffset(18, 18)
-		knob.BackgroundColor3 = T.faceHelp
-		knob.BorderSizePixel = 0
-		knob.Active = true
-		knob.Parent = track
-		Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
-
-		local box = Instance.new("TextBox")
-		box.Position = UDim2.fromOffset(10, 50)
-		box.Size = UDim2.new(1, -20, 0, 26)
-		box.BorderSizePixel = 0
-		box.Font = FONT
-		box.TextSize = 13
-		box.ClearTextOnFocus = true
-		box.Parent = body
-		Instance.new("UICorner", box).CornerRadius = UDim.new(0, 8)
-		onTheme(function()
-			box.BackgroundColor3 = T.field
-			box.TextColor3 = T.text
-		end)
-
-		local function setForce(v)
-			force = math.clamp(v, FMIN, FMAX)
-			knob.Position = UDim2.new((force - FMIN) / (FMAX - FMIN), 0, 0.5, 0)
-			label.Text = "Força: " .. math.floor(force + 0.5)
-			if not box:IsFocused() then box.Text = tostring(math.floor(force + 0.5)) end
-		end
-		box.FocusLost:Connect(function()
-			local s = string.gsub(box.Text, ",", ".")
-			local n = tonumber(s)
-			if n then setForce(n) else setForce(force) end
-		end)
-
-		local dragging = false
-		local function moveTo(x)
-			local a = math.clamp((x - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
-			setForce(FMIN + a * (FMAX - FMIN))
-		end
-		local function dragForceStart(input)
-			if isPress(input) then
-				dragging = true
-				moveTo(input.Position.X)
-			end
-		end
-		track.InputBegan:Connect(dragForceStart)
-		knob.InputBegan:Connect(dragForceStart)
-
-		local kickBtn = new3DButton(body, "chutar", UDim2.fromOffset(10, 84), UDim2.new(1, -20, 0, 32), "Net")
-		local status = mkLabel(body, "", 11, "textDim")
-		status.Position = UDim2.fromOffset(10, 120)
-		status.Size = UDim2.new(1, -20, 0, 28)
-
-		-- animação do chute (se o Roblox não deixar tocar essa animação, o chute continua funcionando sem ela)
-		local track0, trackHum = nil, nil
-		local function playKickAnim(hum)
-			pcall(function()
-				if trackHum ~= hum or not track0 then
-					local animator = hum:FindFirstChildOfClass("Animator") or hum
-					track0 = animator:LoadAnimation(kickAnim)
-					trackHum = hum
-				end
-				track0:Play()
-			end)
-		end
-
-		local function kick()
-			if busy then return end
-			local char = player.Character
-			local hum = char and char:FindFirstChildOfClass("Humanoid")
-			local hrp = char and char:FindFirstChild("HumanoidRootPart")
-			if not (hum and hrp) then
-				flashText(kickBtn.face, "sem personagem", "bad")
-				return
-			end
-			busy = true
-			pcall(function() if setsimulationradius then setsimulationradius(1000, 1000) end end)
-			playKickAnim(hum)
-			task.wait(KICK_DELAY)
-
-			local count = 0
-			if hrp.Parent then
-				local ex = {}
-				for _, p in ipairs(Players:GetPlayers()) do
-					if p.Character then ex[#ex + 1] = p.Character end
-				end
-				kickParams.FilterDescendantsInstances = ex
-				-- caixa até REACH studs à frente (do chão até um pouco acima da cintura)
-				local cf = hrp.CFrame * CFrame.new(0, -0.5, -(0.5 + REACH / 2))
-				local parts = workspace:GetPartBoundsInBox(cf, Vector3.new(5, 5, REACH), kickParams)
-				local look = hrp.CFrame.LookVector
-				local flat = Vector3.new(look.X, 0, look.Z)
-				if flat.Magnitude < 0.01 then flat = Vector3.new(0, 0, -1) end
-				local dir = (flat.Unit + Vector3.new(0, 0.35, 0)).Unit
-				local done = {}
-				for _, part in ipairs(parts) do
-					local root = part.AssemblyRootPart or part
-					if not done[root] and not root.Anchored and not part.Anchored then
-						done[root] = true
-						root.AssemblyLinearVelocity = dir * force
-						root.AssemblyAngularVelocity = Vector3.new(math.random(-6, 6), math.random(-6, 6), math.random(-6, 6))
-						count += 1
-					end
-				end
-			end
-			status.Text = count == 1 and "1 parte arremessada" or (count .. " partes arremessadas")
-			task.delay(0.6, function() busy = false end)
-		end
-		kickBtn.face.Activated:Connect(kick)
-
-		table.insert(connList, UIS.InputChanged:Connect(function(input)
-			if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then return end
-			if drag then
-				local d = input.Position - dragStart
-				local screen = gui.AbsoluteSize
-				local nx = math.clamp(dragPos.X.Offset + d.X, 0, math.max(0, screen.X - CW))
-				local ny = math.clamp(dragPos.Y.Offset + d.Y, 0, math.max(0, screen.Y - (minimized and HEADER_H or CH)))
-				menu.Position = UDim2.fromOffset(nx, ny)
-			end
-			if dragging then moveTo(input.Position.X) end
-		end))
-		table.insert(connList, UIS.InputEnded:Connect(function(input)
-			if isPress(input) then
-				drag = false
-				dragging = false
-			end
-		end))
-
-		setForce(force)
-		chutaoToggle = function(enable)
-			menu.Visible = enable
-			if enable then
-				scale.Scale = 0.85
-				tween(scale, 0.25, { Scale = 1 }, Enum.EasingStyle.Back)
-			end
-		end
-
-		conns.chutaoCleanup = { Disconnect = function()
-			for _, c in ipairs(connList) do c:Disconnect() end
-			menu:Destroy()
-		end }
-	end
-	build()
-end
-
-do
-	local page = pages.fun
-	addToggle(page, "Chutao", "chutão", "Abre um mini menu para escolher a força. \"chutar\" faz a animação e arremessa as partes soltas a até 4 studs à frente (para resgatar quem ficou soterrado).", chutaoToggle)
+	addToggle(page, "Binoculars", "binóculos", "Dá um binóculo na mochila. Equipe para dar zoom (barra do lado direito da tela).", binocularsToggle)
+	addToggle(page, "AngryBird", "estilingue espacial", "te arremessa com gravidade baixa", angryBirdToggle)
 end
 
 -- ===== ABA UPDATES (versão atual e histórico) =====
 -- Para registrar uma versão nova: acrescente uma entrada no TOPO da lista UPDATES (as antigas continuam abaixo).
 local UPDATES = {
-	{
-		version = "1.21",
-		date = "26/11/2026",
-		added = {},
-		changed = {
-			"Anti Part Fling: as partes detectadas agora são removidas do workspace (não ficam mais transparentes) e só voltam quando o botão é desligado",
-		},
-		removed = {},
-	},
-	{
-		version = "1.20",
-		date = "20/11/2026",
-		added = {
-			"Nova aba Fun: botão \"chutão\" abre um mini menu (arrastável e minimizável) para escolher a força; \"chutar\" toca a animação e arremessa as partes soltas a até 4 studs à frente",
-			"Angry bird: cadeado de gravidade e cadeado de força (mantêm o valor escolhido depois de pousar)",
-		},
-		changed = {
-			"Anti Part Fling refeito do zero: detecta partes do mapa muito rápidas por mais de 2 segundos, tira a colisão delas e deixa 50% transparentes, e também tira a colisão das suas partes; aviso pequeno na tela (\"detectando\" e, depois, quantas foram detectadas e removidas)",
-			"Angry bird: barra de gravidade com máximo 40 e barra de força com máximo 70",
-			"Angry bird: dá para arremessar de novo ainda no ar (a linha de mira continua aparecendo durante o voo)",
-			"Angry bird: o botão de pular do Roblox faz o personagem ficar em pé",
-			"Binóculos: sem a moldura preta, só o zoom; quanto maior o zoom, menor a sensibilidade da câmera",
-		},
-		removed = {
-			"Posição da câmera (X, Y, Z, movimento fluido e presets)",
-			"Explorar servidores (browser de servidores)",
-			"Botão \"ficar em pé\" do Angry bird",
-		},
-	},
-	{
-		version = "1.19",
-		date = "08/11/2026",
-		added = {
-			"Angry bird: botão de minimizar e menu mais estreito (com rolagem)",
-			"Angry bird: botão N (gravidade normal), barra de 0 a 40 com 3 sensibilidades (fina, média, alta) e caixas para digitar gravidade e força",
-			"Angry bird: botão \"ficar em pé\" e botão \"airbag\" (freia aos poucos perto do destino e levanta de pé ao chegar)",
-			"Angry bird: com \"escolher destino\", o código procura um caminho livre (sobe o arremesso para passar por cima do que estiver no meio); laranja = caminho bloqueado, melhor tentativa",
-			"Posição da câmera (aba Comportamento): X, Y e Z, movimento fluido com sensibilidade e 2 presets salvos",
-			"Anti Part Fling: partes soltas que ficam rápidas por 5 segundos seguidos perdem a colisão e ficam 50% transparentes",
-		},
-		changed = {
-			"Angry bird: o personagem fica em ragdoll até tocar uma superfície, sem limite de tempo (antes levantava no ar depois de alguns segundos)",
-			"Angry bird: ao pousar ou morrer, a gravidade volta ao normal",
-			"Angry bird: a barra de gravidade agora vai de 0 a 40 e o botão \"lançar\" também serve no modo livre (com a força digitada)",
-		},
-		removed = {
-			"Botão \"padrão\" da gravidade (agora é o botão N)",
-		},
-	},
-	{
-		version = "1.18",
-		date = "06/11/2026",
-		added = {
-			"Nova aba Fun, com o interruptor \"angry bird\"",
-			"Angry bird: mini menu independente (arrastável pelo título) com barra de gravidade (0 a 100) e botão \"padrão\" para voltar ao normal",
-			"Barra de força na lateral direita (estilo taco de sinuca): puxe para baixo e solte para arremessar o personagem, que gira no ar e levanta de pé ao pousar",
-			"Escolher destino: toque no cenário, o código calcula o ângulo e mostra a linha de mira (azul = alcança, vermelha = não alcança, com sugestão de força e gravidade)",
-		},
-		changed = {},
-		removed = {},
-	},
-	{
-		version = "1.17",
-		date = "01/11/2026",
-		added = {
-			"Ferramenta Binóculos: dá zoom (FOV) com uma barra arrastável do lado direito da tela, com clique a cada passo; some da tela ao desequipar",
-			"Opção de FOV na aba Comportamento (câmera normal, separada do zoom dos binóculos)",
-			"Trava de direção (estilo shift lock): botão preto arrastável e 70% transparente; toque liga/desliga, segurar 1 s fixa a posição dele",
-			"Anti Part Fling agora também desliga CanTouch (sem dano de objeto, sem ativar botões/gatilhos por toque)",
-			"Anti Part Fling: pouso suave perto do chão, para reduzir a velocidade de impacto que os jogos costumam checar para aplicar dano de queda",
-			"Anti Part Fling: o retorno ao lugar seguro agora funciona também andando, não só parado",
-		},
-		changed = {
-			"Botão fechar foi para a aba Configurações, para evitar fechar o menu sem querer",
-			"Plataforma do Float um pouco translúcida (antes era 100% invisível)",
-		},
-		removed = {},
-	},
-	{
-		version = "1.16",
-		date = "29/10/2026",
-		added = {
-			"Painel reorganizado em abas: Comportamento, Jogadores, Server, Updates e Configurações",
-			"Botões em estilo interruptor, com nome e descrição do que fazem",
-			"Botão de minimizar na janela principal e na janela de servidores",
-			"Espectar: a câmera vai até o jogador selecionado; desligar devolve a câmera",
-			"Frear (segurar): para o acompanhamento do ajudar e, depois de 1 segundo, vai para baixo do jogador",
-			"Explorar servidores: filtros por jogadores e ping, 5 servidores por página e fotos dos jogadores",
-			"Botão voltar: volta para o último servidor em que você estava",
-			"Botão fechar e aviso na tela quando o menu já está aberto",
-			"Tema claro e 3 sons nos botões nas Configurações: pop (estourar uma bolinha), retro (click clássico do Roblox) e gota (uma gota na água)",
-			"Efeito mola no botão do menu: ele nunca fica fora da tela",
-			"Seletor de jogador com amigos no topo (outra cor), ordem alfabética e foto do avatar",
-		},
-		changed = {
-			"Server hop: procura servidor com 6 ou mais jogadores e o menor ping",
-			"Float mais rápido",
-			"\"voar\" agora se chama fly",
-			"Ajudar: segue o jogador na horizontal; subir e descer ficam na aba Jogadores",
-		},
-		removed = {
-			"Animações e tema românticos (agora só o visual dark e o claro)",
-			"Botão FPS",
-			"Telecinese",
-			"Função secreta do botão \"TP até o jogador\" (agora é o botão frear)",
-		},
-	},
 }
 
 do
@@ -3685,6 +3536,7 @@ do
 	section(page, "Sons dos botões")
 	local soundRow = addRow(page, "Sons", "Liga ou desliga os sons ao tocar nos botões.", "switch")
 	soundRow.face.Activated:Connect(function()
+		config.soundName = "retro"
 		config.sound = not config.sound
 		soundRow.setOn(config.sound)
 		saveConfig()
@@ -3692,34 +3544,12 @@ do
 	end)
 
 	-- escolha do som (só um fica ligado): pop, retro ou gota
-	section(page, "Som escolhido")
-	local choices = {
-		{ name = "pop", desc = "Som de estourar uma bolinha." },
-		{ name = "retro", desc = "O click retro clássico do Roblox." },
-		{ name = "gota", desc = "Uma única gota caindo na água." },
-	}
-	local choiceRows = {}
-	local function refreshChoice()
-		for name, r in pairs(choiceRows) do r.setOn(config.soundName == name) end
-	end
-	for _, c in ipairs(choices) do
-		local r = addRow(page, c.name, c.desc, "switch")
-		choiceRows[c.name] = r
-		r.face.Activated:Connect(function()
-			config.soundName = c.name
-			refreshChoice()
-			saveConfig()
-			playSfx(c.name) -- toca o som escolhido para você ouvir
-		end)
-	end
-
 	local hint = mkLabel(page, "Os sons usam arquivos do próprio Roblox; se algum não carregar no seu aparelho, ele fica mudo.", 11, "textDim")
 	hint.Size = UDim2.new(1, 0, 0, 0)
 	hint.AutomaticSize = Enum.AutomaticSize.Y
 
 	themeRow.setOn(config.theme == "light")
 	soundRow.setOn(config.sound)
-	refreshChoice()
 
 	section(page, "Fechar")
 	closeBtn = addRow(page, "fechar", "Fecha e desliga tudo. Fica aqui para evitar fechar sem querer.", "action", "fechar", "Danger")
